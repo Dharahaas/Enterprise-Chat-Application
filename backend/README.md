@@ -22,7 +22,7 @@ copy .env.example .env
 By default, the backend uses:
 - **Chroma ONNX** (`all-MiniLM-L6-v2`, 384 dimensions) for CPU embeddings — no embedding API key
 - **Chroma** for the vector DB — local file-based, no signup
-- **Gemini 2.5 Flash-Lite** for hosted answer generation
+- **Gemini 3.5 Flash-Lite** for hosted answer generation
 
 The server also initializes a local SQLite auth database. By default it is
 stored in the current user's OS data directory; `AUTH_DATABASE_PATH` can
@@ -47,16 +47,16 @@ Create a Gemini API key at <https://aistudio.google.com/apikey>, then edit
 ```dotenv
 LLM_PROVIDER=gemini
 GEMINI_API_KEY=your-key-here
-GEMINI_MODEL=gemini-2.5-flash-lite
+GEMINI_MODEL=gemini-3.5-flash-lite
 ```
 
 Keep the key in the ignored `backend/.env`; never paste it into chat or commit
 it. The backend can also read `GEMINI_API_KEY_FILE` for mounted deployment
-secrets. The backend restricts Gemini configuration to
-`gemini-2.5-flash-lite`. Google's API
-may limit free-tier model access by project; check the model's active quota and
-pricing in AI Studio before using it. To avoid charges, keep the project on the
-free tier and do not link it to a billing-enabled Google Cloud account.
+secrets. `GEMINI_MODEL` is read from environment configuration and defaults to
+`gemini-3.5-flash-lite`. Google's model access and free-tier quotas depend on
+the AI Studio project; check active access in AI Studio. To avoid charges,
+keep the project on the free tier and do not link it to a billing-enabled
+Google Cloud account.
 
 **Privacy:** questions and retrieved document passages are sent to Google.
 Google's Gemini free-tier terms may allow submitted data to be used to improve

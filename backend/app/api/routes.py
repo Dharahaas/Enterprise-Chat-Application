@@ -107,6 +107,7 @@ async def chat(req: ChatRequest) -> ChatResponse:
     return ChatResponse(
         answer=result.answer,
         agent=result.agent,
+        error_code=result.error_code,
         sources=[
             SourceChunk(
                 document=s.document,

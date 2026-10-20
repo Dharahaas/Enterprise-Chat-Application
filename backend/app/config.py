@@ -80,7 +80,7 @@ class Settings(BaseSettings):
         default_factory=lambda: _read_secret_file("GEMINI_API_KEY"),
         repr=False,
     )
-    gemini_model: str = "gemini-2.5-flash-lite"
+    gemini_model: str = "gemini-3.5-flash-lite"
     openai_api_key: str = ""
     openai_model: str = "gpt-4o-mini"
     llm_temperature: float = 0.2

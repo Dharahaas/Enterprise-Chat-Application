@@ -104,13 +104,11 @@ def get_llm() -> Any:
 
         if settings.llm_provider == "gemini":
             model = settings.gemini_model.strip()
-            if model != "gemini-2.5-flash-lite":
-                raise ValueError(
-                    "Gemini configuration only permits gemini-2.5-flash-lite"
-                )
             api_key = settings.gemini_api_key.strip() or os.getenv(
                 "GEMINI_API_KEY", ""
             ).strip()
+            if not model:
+                raise ValueError("GEMINI_MODEL must not be empty")
             return ChatOpenAI(
                 model=model,
                 api_key=api_key,

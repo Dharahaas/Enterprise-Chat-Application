@@ -183,6 +183,19 @@
       return conversations.find(item => item.id === currentConversationId);
     }
 
+    function providerErrorMessage(errorCode) {
+      const messages = {
+        authentication: 'The AI assistant is temporarily unavailable. Please contact your administrator.',
+        model_unavailable: 'The AI assistant is temporarily unavailable. Please try again later.',
+        network: 'The AI assistant could not connect just now. Please try again shortly.',
+        not_configured: 'AI responses are not configured yet. Please contact your administrator.',
+        provider_error: 'The AI assistant is temporarily unavailable. Please try again later.',
+        provider_unavailable: 'The AI assistant is temporarily unavailable. Please try again later.',
+        quota: 'The AI assistant is busy right now. Please try again in a little while.',
+      };
+      return messages[errorCode] || null;
+    }
+
     function renderMessage(message) {
       const isUser = message.role === 'user';
       const agent = AGENTS.find(item => item.id === message.agent) || activeAgent;
@@ -448,9 +461,10 @@
       let reply;
       try {
         const response = await API.chat(question, conversation.agent);
+        const providerMessage = providerErrorMessage(response.error_code);
         reply = {
           role: 'agent',
-          content: response.answer,
+          content: providerMessage || response.answer,
           agent: response.agent,
           sources: (response.sources || []).map(source => ({
             document: source.document,
@@ -464,6 +478,7 @@
             : response.llm_provider === 'openai'
               ? 'OpenAI'
               : response.llm_provider === 'unconfigured' ? 'Setup required' : '',
+          isError: Boolean(response.error_code),
         };
       } catch (error) {
         reply = {

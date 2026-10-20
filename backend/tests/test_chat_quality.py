@@ -197,16 +197,16 @@ def test_vpm_typo_routes_to_it_and_retrieves_vpn_guidance(
 
     monkeypatch.setattr(pipeline, "retrieve", capture_retrieval)
 
-    result = post_chat("what is with the vpm that i need to know about")
+    result = post_chat("tell me how to setup vpm")
 
     assert result["agent"] == "it"
     assert result["answer"] == (
         "The IT guide covers VPN configuration using Cisco AnyConnect."
     )
-    assert retrieved == [("it", "what is with the vpn that i need to know about")]
+    assert retrieved == [("it", "tell me how to setup vpn")]
     assert result["sources"][0]["document"] == "IT_Network_Guide_v2.pdf"
     assert model.messages is not None
-    assert "what is with the vpn that i need to know about" in str(model.messages).lower()
+    assert "tell me how to setup vpn" in str(model.messages).lower()
 
 
 @pytest.mark.parametrize(
@@ -449,29 +449,70 @@ def test_gemini_uses_google_openai_compatible_endpoint(
         return object()
 
     monkeypatch.setattr(llm.settings, "llm_provider", "gemini")
-    monkeypatch.setattr(llm.settings, "gemini_model", "gemini-2.5-flash-lite")
+    monkeypatch.setattr(llm.settings, "gemini_model", "gemini-3.5-flash-lite")
     monkeypatch.setattr(llm.settings, "gemini_api_key", "test-gemini-key")
     monkeypatch.setattr(llm, "is_llm_enabled", lambda: True)
     monkeypatch.setattr(langchain_openai, "ChatOpenAI", fake_chat_openai)
 
     llm.get_llm()
 
-    assert received["model"] == "gemini-2.5-flash-lite"
+    assert received["model"] == "gemini-3.5-flash-lite"
     assert received["base_url"] == (
         "https://generativelanguage.googleapis.com/v1beta/openai/"
     )
     assert received["api_key"] == "test-gemini-key"
 
 
-def test_gemini_configuration_rejects_other_models(
+def test_gemini_model_is_read_from_configuration(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    import langchain_openai
+
+    received: dict[str, Any] = {}
+
+    def fake_chat_openai(**kwargs: Any) -> object:
+        received.update(kwargs)
+        return object()
+
     monkeypatch.setattr(llm.settings, "llm_provider", "gemini")
     monkeypatch.setattr(llm.settings, "gemini_model", "gemini-3.8-flash")
+    monkeypatch.setattr(llm.settings, "gemini_api_key", "test-gemini-key")
     monkeypatch.setattr(llm, "is_llm_enabled", lambda: True)
+    monkeypatch.setattr(langchain_openai, "ChatOpenAI", fake_chat_openai)
 
-    with pytest.raises(ValueError, match="gemini-2.5-flash-lite"):
-        llm.get_llm()
+    llm.get_llm()
+
+    assert received["model"] == "gemini-3.8-flash"
+
+
+@pytest.mark.parametrize("agent", ["hr", "it", "policy"])
+def test_model_unavailable_is_safe_and_consistent_for_every_agent(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    agent: str,
+) -> None:
+    class ModelUnavailable(Exception):
+        status_code = 404
+        body = {
+            "error": {
+                "code": "NOT_FOUND",
+                "message": "Model gemini-3.5-flash-lite unavailable for key sk-test-secret",
+            }
+        }
+
+    monkeypatch.setattr(llm.settings, "llm_provider", "gemini")
+    monkeypatch.setattr(llm.settings, "gemini_model", "gemini-3.5-flash-lite")
+    monkeypatch.setattr(llm, "llm_provider_name", lambda: "gemini")
+    mock_generation(monkeypatch, sample_chunks(), ModelUnavailable())
+
+    with caplog.at_level("WARNING", logger="app.rag.pipeline"):
+        result = post_chat("How do I set up VPM?", agent=agent)
+
+    assert result["agent"] == agent
+    assert result["error_code"] == "model_unavailable"
+    assert "temporarily unavailable" in result["answer"].lower()
+    assert "sk-test-secret" not in caplog.text
+    assert "gemini-3.5-flash-lite" in caplog.text
 
 
 def test_gemini_without_key_is_not_reported_as_configured(
@@ -580,7 +621,7 @@ def test_generation_failure_logs_stage_provider_model_and_redacts_key(
     monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    monkeypatch.setattr(llm.settings, "gemini_model", "gemini-2.5-flash-lite")
+    monkeypatch.setattr(llm.settings, "gemini_model", "gemini-3.5-flash-lite")
     model = mock_generation(
         monkeypatch,
         sample_chunks(),
@@ -593,7 +634,7 @@ def test_generation_failure_logs_stage_provider_model_and_redacts_key(
     assert "unable to generate an answer" in result.answer.lower()
     assert "stage=invoke" in caplog.text
     assert "provider=gemini" in caplog.text
-    assert "model=gemini-2.5-flash-lite" in caplog.text
+    assert "model=gemini-3.5-flash-lite" in caplog.text
     assert "provider rejected key" in caplog.text
     assert "sk-test-secret" not in caplog.text
     assert model.messages is not None
@@ -660,9 +701,11 @@ def test_answer_and_citations_are_returned_in_separate_schema_fields(
         "sources",
         "latency_ms",
         "llm_provider",
+        "error_code",
         "conversation_id",
         "timestamp",
     }
+    assert result["error_code"] is None
     assert isinstance(result["llm_provider"], str)
     assert "Leave_Policy.docx" not in result["answer"]
     assert result["sources"][0]["document"] == "Leave_Policy.docx"

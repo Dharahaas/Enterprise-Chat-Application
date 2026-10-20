@@ -30,6 +30,7 @@ class ChatResponse(BaseModel):
     sources: list[SourceChunk]
     latency_ms: int
     llm_provider: str
+    error_code: str | None = None
     conversation_id: str
     timestamp: str
 

@@ -53,8 +53,7 @@ AUTHENTICATION_ERROR_MESSAGE = (
     "project configuration."
 )
 MODEL_UNAVAILABLE_MESSAGE = (
-    "The configured Gemini model is unavailable to this project. Check model "
-    "access and the model identifier in Google AI Studio."
+    "The AI assistant is temporarily unavailable. Please try again later."
 )
 NETWORK_ERROR_MESSAGE = (
     "The assistant could not reach Gemini right now. Please check the connection "
@@ -78,6 +77,7 @@ class RagResult:
     sources: list[RetrievedChunk]
     latency_ms: int
     llm_provider: str
+    error_code: str | None = None
 
 
 class RetrievalError(RuntimeError):
@@ -327,6 +327,7 @@ def _result(
     sources: list[RetrievedChunk],
     start: float,
     provider: str | None = None,
+    error_code: str | None = None,
 ) -> RagResult:
     return RagResult(
         answer=answer,
@@ -334,6 +335,7 @@ def _result(
         sources=sources,
         latency_ms=int((time.perf_counter() - start) * 1000),
         llm_provider=provider or llm_provider_name(),
+        error_code=error_code,
     )
 
 
@@ -441,6 +443,7 @@ def run_rag(agent_id: str, question: str) -> RagResult:
             top_chunks,
             start,
             provider="unconfigured",
+            error_code="not_configured",
         )
     except LLMConfigurationError:
         logger.error(
@@ -456,6 +459,7 @@ def run_rag(agent_id: str, question: str) -> RagResult:
             top_chunks,
             start,
             provider=llm_provider_name(),
+            error_code="provider_unavailable",
         )
     except Exception as exc:
         if isinstance(exc, MalformedModelResponseError):
@@ -490,6 +494,11 @@ def run_rag(agent_id: str, question: str) -> RagResult:
             agent_id,
             top_chunks,
             start,
+            error_code=(
+                "malformed_response"
+                if isinstance(exc, MalformedModelResponseError)
+                else category
+            ),
         )
 
     return _result(answer_text, agent_id, top_chunks, start)

@@ -91,8 +91,8 @@ Each agent grounds its answer in retrieved documents using **RAG**, so every res
 3. Knowledge question → embed with Chroma's ONNX all-MiniLM-L6-v2 (384-dim)
 4. Search the selected agent's Chroma collection; convert distances to cosine similarity
 5. Filter low-confidence and duplicate passages
-6. Build role-separated prompt and generate with Gemini 2.5 Flash-Lite
-7. Return JSON {answer, sources[], latency_ms}; provider/configuration failures stay explicit
+6. Build role-separated prompt and generate with Gemini 3.5 Flash-Lite
+7. Return JSON {answer, sources[], latency_ms, error_code}; provider/configuration failures stay explicit
 8. Frontend renders the answer and source references separately
 ```
 
@@ -156,7 +156,7 @@ The Phase 2 backend is a Python FastAPI application using LangChain for RAG orch
 - **Chroma** local vector database — no signup, no external dependencies
 - **Chroma ONNX** (`all-MiniLM-L6-v2`) for CPU embeddings — loaded on the first retrieval or ingestion request; no embedding API key needed
 - **Three specialist agents** (HR / IT / Policy), each with its own vector namespace, system prompt, and retrieval config
-- **Configured language-model generation** — Gemini 2.5 Flash-Lite when `GEMINI_API_KEY` is configured; otherwise knowledge questions receive a clear setup message instead of a fabricated or chunk-based answer. Check AI Studio for your project's free-tier eligibility and quotas. OpenAI is an optional paid alternative.
+- **Configured language-model generation** — Gemini 3.5 Flash-Lite when `GEMINI_API_KEY` is configured; otherwise knowledge questions receive a clear setup message instead of a fabricated or chunk-based answer. Model access and quotas depend on the Google AI Studio project. OpenAI is an optional paid alternative.
 - **Document ingestion pipeline** — load PDF/DOCX/TXT/MD → chunk (size=512, overlap=64) → embed → upsert to vector DB
 - **11 sample documents** seeded on first run (4 HR + 3 IT + 4 Policy)
 - **Auto-seeding** on startup if the vector DB is empty
