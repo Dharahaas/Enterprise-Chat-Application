@@ -10,6 +10,13 @@ const APP = {
 };
 
 const CHAT_USER_SCOPE_KEY = "eka-chat-user-scope-v1";
+const DEMO_CHAT_SCOPE_KEY = "eka-demo-chat-scope-v1";
+
+function newChatScope() {
+  return globalThis.crypto?.randomUUID
+    ? globalThis.crypto.randomUUID()
+    : `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+}
 
 function escapeHTML(value) {
   return String(value ?? '')
@@ -136,14 +143,15 @@ const API = (() => {
         body: JSON.stringify({ username, password, role }),
         skipCsrf: true,
       });
-      const enteredUsername = username.trim().toLowerCase();
-      const authenticatedUsername = session.user.username.toLowerCase();
-      localStorage.setItem(
-        CHAT_USER_SCOPE_KEY,
-        authenticatedUsername === enteredUsername
-          ? session.user.username
-          : enteredUsername,
-      );
+      const isSharedDemoIdentity = session.user.username === 'demo-admin@demo.invalid' ||
+        session.user.username === 'demo-employee@demo.invalid';
+      const chatScope = isSharedDemoIdentity ? newChatScope() : session.user.username;
+      if (isSharedDemoIdentity) {
+        localStorage.setItem(DEMO_CHAT_SCOPE_KEY, chatScope);
+      } else {
+        localStorage.removeItem(DEMO_CHAT_SCOPE_KEY);
+      }
+      localStorage.setItem(CHAT_USER_SCOPE_KEY, chatScope);
       csrfToken = session.csrf_token;
       return session.user;
     },
@@ -151,6 +159,15 @@ const API = (() => {
       const session = await request('/api/auth/session');
       csrfToken = session.csrf_token;
       appUser = session.user;
+      if (
+        (session.user.username === 'demo-admin@demo.invalid' ||
+          session.user.username === 'demo-employee@demo.invalid') &&
+        !localStorage.getItem(CHAT_USER_SCOPE_KEY)
+      ) {
+        const chatScope = newChatScope();
+        localStorage.setItem(DEMO_CHAT_SCOPE_KEY, chatScope);
+        localStorage.setItem(CHAT_USER_SCOPE_KEY, chatScope);
+      }
       return session.user;
     },
     logout: async () => {
@@ -160,6 +177,7 @@ const API = (() => {
         csrfToken = null;
         appUser = null;
         localStorage.removeItem(CHAT_USER_SCOPE_KEY);
+        localStorage.removeItem(DEMO_CHAT_SCOPE_KEY);
       }
     },
     chat: (question, agent, conversationId, conversationHistory) =>
@@ -261,6 +279,10 @@ async function requireAuth(requiredRole = null) {
   }
 }
 
+function isDemoAdminUser(user) {
+  return user?.role === 'admin' && user.username === 'demo-admin@demo.invalid';
+}
+
 async function logout() {
   try {
     await API.logout();
@@ -281,7 +303,10 @@ function renderSidebar(activePage) {
   const navItems = [
     { id: "portal", label: "Employee portal", href: "portal.html", icon: chartIcon() },
     { id: "chat", label: "Chat", href: "chat.html", icon: chatIcon() },
-    ...(user.role === 'admin' ? [
+    ...(isDemoAdminUser(user) ? [
+      { id: "demo-admin", label: "Demo admin", href: "demo-admin.html", icon: chartIcon() },
+    ] : []),
+    ...(user.role === 'admin' && !isDemoAdminUser(user) ? [
       { id: "documents", label: "Documents", href: "documents.html", icon: docIcon() },
       { id: "analytics", label: "Analytics", href: "analytics.html", icon: chartIcon() },
     ] : []),

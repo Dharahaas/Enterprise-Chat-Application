@@ -1,0 +1,34 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Demo Administrator · Northstar</title>
+  <link rel="stylesheet" href="css/style.css" />
+  <link rel="stylesheet" href="css/pages.css" />
+</head>
+<body>
+  <script src="js/app.js"></script>
+  <script>
+    const demoAdminContent = `
+      <section class="page-header">
+        <div><p class="eyebrow">SAMPLE WORKSPACE</p><h1>Demo administrator</h1>
+          <p>This view uses fictional sample information. It does not expose live documents, user records, analytics, or administrative controls.</p>
+        </div>
+      </section>
+      <section class="stat-grid" aria-label="Synthetic demo metrics">
+        <article class="stat-card"><div class="stat-label">Sample knowledge collections</div><div class="stat-value">3</div><div class="stat-delta">HR · IT · Policy</div></article>
+        <article class="stat-card"><div class="stat-label">Example indexed documents</div><div class="stat-value">24</div><div class="stat-delta">Fictional demo count</div></article>
+        <article class="stat-card"><div class="stat-label">Example assistant status</div><div class="stat-value">Ready</div><div class="stat-delta">Ask the assistant a question</div></article>
+      </section>
+      <section class="analytics-empty-panel">
+        <h2>Available in this demo</h2>
+        <p>Explore the same employee portal and assistant knowledge base available to employee demo users. This page adds no access to live administrative data or controls.</p>
+        <a class="btn btn-primary" href="chat.html">Open assistant</a>
+      </section>
+      <p class="login-demo-note">Restricted demo identity: document management, real analytics, evaluations, metrics, uploads, deletion, and database seeding are unavailable.</p>
+    `;
+    mountShell('demo-admin', 'Demo administrator', 'Demo / Overview', demoAdminContent, '', 'admin');
+  </script>
+</body>
+</html>

@@ -109,11 +109,17 @@ def test_typo_greeting_is_understood(monkeypatch: pytest.MonkeyPatch) -> None:
     [
         ("thanks", "thanks", "You're welcome!"),
         ("thank you", "thanks", "You're welcome!"),
+        ("ThankYou!!!", "thanks", "You're welcome!"),
+        ("thank you   ", "thanks", "You're welcome!"),
+        ("ok thank you", "thanks", "You're welcome!"),
+        ("OK, THANK YOU!", "thanks", "You're welcome!"),
+        ("thankyou", "thanks", "You're welcome!"),
+        ("ok thanks", "thanks", "You're welcome!"),
         ("ok", "acknowledgement", "Okay!"),
         ("okay.", "acknowledgement", "Okay!"),
         ("got it", "acknowledgement", "Okay!"),
         ("ok, got it", "acknowledgement", "Okay!"),
-        ("okay thanks", "acknowledgement", "Okay!"),
+        ("okay thanks", "thanks", "You're welcome!"),
         ("good", "positive_acknowledgement", "Glad to hear it!"),
         ("great!", "positive_acknowledgement", "Glad to hear it!"),
         ("bye", "farewell", "Goodbye!"),
@@ -758,6 +764,52 @@ def test_it_simpler_follow_up_keeps_the_previous_topic(
     assert "How do I set up VPN?" in str(model.messages)
 
 
+@pytest.mark.parametrize(
+    "follow_up",
+    [
+        "How do I do that?",
+        "What happens next?",
+        "what happens after that?",
+        "What about IT?",
+    ],
+)
+def test_short_follow_up_keeps_the_previous_topic(
+    monkeypatch: pytest.MonkeyPatch,
+    follow_up: str,
+) -> None:
+    retrieved_queries: list[str] = []
+    vpn_context = RetrievedChunk(
+        document="IT_Network_Guide_v2.pdf",
+        page=None,
+        section="2",
+        score=0.71,
+        snippet="Open AnyConnect, enter vpn.company.com, and sign in with your credentials.",
+    )
+    model = mock_generation(
+        monkeypatch,
+        [vpn_context],
+        AIMessage(content="Continue with the documented VPN steps."),
+    )
+    actual_retrieve = pipeline.retrieve
+
+    def capture_retrieve(agent_id: str, query: str) -> list[RetrievedChunk]:
+        retrieved_queries.append(query)
+        return actual_retrieve(agent_id, query)
+
+    monkeypatch.setattr(pipeline, "retrieve", capture_retrieve)
+    result = pipeline.run_rag(
+        "it",
+        follow_up,
+        [("user", "How do I set up VPN?"), ("assistant", "Here are the steps.")],
+    )
+
+    assert result.sources
+    assert len(retrieved_queries) == 1
+    assert "vpn" in retrieved_queries[0].casefold()
+    assert model.messages is not None
+    assert "How do I set up VPN?" in str(model.messages)
+
+
 def test_unrelated_low_confidence_matches_are_filtered(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1014,6 +1066,20 @@ def test_gemini_environment_key_enables_provider(
 
     assert llm.is_llm_enabled()
     assert llm.llm_provider_name() == "gemini"
+
+
+def test_google_api_key_name_is_not_a_configured_project_alias(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.config import Settings
+
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    monkeypatch.delenv("GEMINI_API_KEY_FILE", raising=False)
+    monkeypatch.setenv("GOOGLE_API_KEY", "test-google-key")
+
+    configured = Settings(_env_file=None)
+
+    assert configured.gemini_api_key == ""
 
 
 @pytest.mark.parametrize(

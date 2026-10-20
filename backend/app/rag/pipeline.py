@@ -126,6 +126,8 @@ def _is_follow_up(question: str) -> bool:
             r"\b(?:any\s+(?:simpler|easier)|simpler|easier|what\s+if|what\s+about|"
             r"where\s+(?:do|can)\s+i|how\s+about|that\s+(?:fails?|doesn't|does\s+not)|"
             r"it\s+(?:fails?|doesn't|does\s+not)|contact\s+them|try\s+next)\b|"
+            r"\bhow\s+do\s+i\s+(?:do|start|continue)\s+that\b|"
+            r"\bwhat\s+happens?\s+(?:next|after\s+that)\b|"
             r"\b(?:i\s+)?(?:need|want|prefer)\s+(?:instructions?\s+)?"
             r"(?:for\s+)?(?:macos|windows|linux)\b|"
             r"\bfor\s+(?:macos|windows|linux)\b",

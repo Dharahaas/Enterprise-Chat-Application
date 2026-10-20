@@ -26,8 +26,8 @@ router = APIRouter(prefix="/api/auth", tags=["authentication"])
 
 
 class LoginRequest(BaseModel):
-    username: str = Field(min_length=1, max_length=254)
-    password: str = Field(min_length=1, max_length=1024)
+    username: str = Field(default="", max_length=254)
+    password: str = Field(default="", max_length=1024)
     role: Literal["employee", "admin"] | None = None
 
 
@@ -73,7 +73,7 @@ async def auth_options(request: Request) -> AuthOptionsResponse:
     demo_login_enabled = _demo_login_enabled_for(request)
     return AuthOptionsResponse(
         demo_login_enabled=demo_login_enabled,
-        demo_admin_login_enabled=demo_login_enabled and not settings.demo_auth_public,
+        demo_admin_login_enabled=demo_login_enabled,
     )
 
 
@@ -83,11 +83,20 @@ async def login(
     request: Request,
     response: Response,
 ) -> LoginResponse:
-    user = authenticate(payload.username, payload.password)
+    user = (
+        authenticate(payload.username, payload.password)
+        if payload.username and payload.password
+        else None
+    )
     if user is not None and payload.role is not None and user.role != payload.role:
         user = None
     if user is None and payload.role and _demo_login_enabled_for(request):
-        if not settings.demo_auth_public or payload.role == "employee":
+        can_use_demo_identity = (
+            payload.role == "employee"
+            or not settings.demo_auth_public
+            or (not payload.username and not payload.password)
+        )
+        if can_use_demo_identity:
             user = authenticate_demo(payload.role)
     if user is None:
         raise HTTPException(

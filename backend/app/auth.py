@@ -20,6 +20,7 @@ logger = logging.getLogger(__name__)
 
 SESSION_COOKIE = "eka_session"
 CSRF_HEADER = "X-CSRF-Token"
+DEMO_ADMIN_USERNAME = "demo-admin@demo.invalid"
 PASSWORD_HASH_ITERATIONS = 600_000
 _DUMMY_PASSWORD_HASH = ""
 
@@ -134,6 +135,8 @@ def create_user(username: str, password: str, role: str) -> None:
         raise ValueError("Username must contain 1 to 254 characters.")
     if role not in {"employee", "admin"}:
         raise ValueError("Role must be 'employee' or 'admin'.")
+    if normalized_username == DEMO_ADMIN_USERNAME:
+        raise ValueError("That username is reserved for the limited demo administrator.")
     if len(password) < 12:
         raise ValueError("Password must be at least 12 characters.")
     password_hash = _hash_password(password)
@@ -166,18 +169,23 @@ def authenticate_demo(role: str) -> AuthenticatedUser:
     """Return a local demo identity for a selected role, without storing a password."""
     if role not in {"employee", "admin"}:
         raise ValueError("Role must be 'employee' or 'admin'.")
-    username = f"demo-{role}@demo.invalid"
-    password_hash = _hash_password(secrets.token_urlsafe(32))
+    username = DEMO_ADMIN_USERNAME if role == "admin" else "demo-employee@demo.invalid"
     with _connect() as connection:
-        connection.execute(
-            "INSERT OR IGNORE INTO users (username, password_hash, role, created_at) "
-            "VALUES (?, ?, ?, ?)",
-            (username, password_hash, role, time()),
-        )
         row = connection.execute(
             "SELECT username, role, active FROM users WHERE username = ?",
             (username,),
         ).fetchone()
+        if row is None:
+            password_hash = _hash_password(secrets.token_urlsafe(32))
+            connection.execute(
+                "INSERT OR IGNORE INTO users (username, password_hash, role, created_at) "
+                "VALUES (?, ?, ?, ?)",
+                (username, password_hash, role, time()),
+            )
+            row = connection.execute(
+                "SELECT username, role, active FROM users WHERE username = ?",
+                (username,),
+            ).fetchone()
     if row is None or row["role"] != role or not row["active"]:
         raise RuntimeError("The local demo identity could not be initialized.")
     return AuthenticatedUser(username=row["username"], role=row["role"])
@@ -239,12 +247,17 @@ def require_user(request: Request) -> AuthenticatedUser:
 
 
 def require_admin(user: AuthenticatedUser = Depends(require_user)) -> AuthenticatedUser:
-    if user.role != "admin":
+    if user.role != "admin" or user.username == DEMO_ADMIN_USERNAME:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Administrator access is required.",
+            detail="Full administrator access is required.",
         )
     return user
+
+
+def is_demo_admin(user: AuthenticatedUser) -> bool:
+    """Identify the public demo identity, which must never reach admin APIs."""
+    return user.role == "admin" and user.username == DEMO_ADMIN_USERNAME
 
 
 def require_csrf(

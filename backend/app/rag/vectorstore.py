@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from functools import lru_cache
 from pathlib import Path
 from threading import RLock
@@ -13,6 +14,7 @@ from langchain_core.embeddings import Embeddings
 from app.config import agent_collections, settings
 
 _vectorstore_lock = RLock()
+logger = logging.getLogger(__name__)
 
 
 def _persist_dir() -> Path:
@@ -56,7 +58,12 @@ def count_chunks(agent_id: str) -> int:
         client = chromadb.PersistentClient(path=str(_persist_dir()))
         col = client.get_collection(agent_collections()[agent_id])
         return col.count()
-    except Exception:
+    except Exception as exc:
+        logger.warning(
+            "Chroma collection count failed agent=%s error_type=%s",
+            agent_id,
+            type(exc).__name__,
+        )
         return 0
 
 

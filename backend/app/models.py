@@ -93,3 +93,4 @@ class HealthResponse(BaseModel):
     vector_db_path: str
     agents: list[str]
     collections: dict[str, str]
+    readiness_issues: list[str] = Field(default_factory=list)

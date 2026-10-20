@@ -64,9 +64,13 @@ def test_demo_login_uses_selected_role_and_keeps_admin_apis_protected(monkeypatc
         json={"username": "another-dummy-name", "password": "any-value", "role": "admin"},
     )
     assert admin_login.status_code == 200
-    assert admin_login.json()["user"]["role"] == "admin"
+    assert admin_login.json()["user"] == {
+        "username": "demo-admin@demo.invalid",
+        "role": "admin",
+    }
+    admin.headers["Cookie"] = f"eka_session={admin.cookies['eka_session']}"
     admin.headers["X-CSRF-Token"] = admin_login.json()["csrf_token"]
-    assert admin.get("/api/documents").status_code == 200
+    assert admin.get("/api/documents").status_code == 403
 
 
 def test_demo_login_is_disabled_outside_development(monkeypatch):
@@ -78,6 +82,7 @@ def test_demo_login_is_disabled_outside_development(monkeypatch):
     options = client.get("/api/auth/options")
     assert options.status_code == 200
     assert options.json()["demo_login_enabled"] is False
+    assert options.json()["demo_admin_login_enabled"] is False
     login = client.post(
         "/api/auth/login",
         json={"username": "anything", "password": "anything", "role": "admin"},
@@ -85,7 +90,26 @@ def test_demo_login_is_disabled_outside_development(monkeypatch):
     assert login.status_code == 401
 
 
-def test_public_demo_login_is_employee_only(monkeypatch):
+def test_public_demo_admin_is_disabled_when_demo_auth_is_off(monkeypatch):
+    monkeypatch.setattr(settings, "environment", "prod")
+    monkeypatch.setattr(settings, "demo_auth_enabled", False)
+    monkeypatch.setattr(settings, "demo_auth_public", True)
+    client = TestClient(app)
+
+    options = client.get("/api/auth/options")
+    assert options.status_code == 200
+    assert options.json() == {
+        "demo_login_enabled": False,
+        "demo_admin_login_enabled": False,
+    }
+    login = client.post(
+        "/api/auth/login",
+        json={"username": "", "password": "", "role": "admin"},
+    )
+    assert login.status_code == 401
+
+
+def test_public_demo_admin_is_limited_and_real_admin_remains_secure(monkeypatch):
     monkeypatch.setattr(settings, "environment", "prod")
     monkeypatch.setattr(settings, "demo_auth_enabled", True)
     monkeypatch.setattr(settings, "demo_auth_public", True)
@@ -94,6 +118,7 @@ def test_public_demo_login_is_employee_only(monkeypatch):
     options = client.get("/api/auth/options")
     assert options.status_code == 200
     assert options.json()["demo_login_enabled"] is True
+    assert options.json()["demo_admin_login_enabled"] is True
 
     employee = client.post(
         "/api/auth/login",
@@ -106,11 +131,53 @@ def test_public_demo_login_is_employee_only(monkeypatch):
         headers={"Cookie": f"eka_session={employee.cookies['eka_session']}"},
     ).status_code == 403
 
-    admin = client.post(
+    invalid_real_admin = client.post(
         "/api/auth/login",
-        json={"username": "visitor", "password": "demo", "role": "admin"},
+        json={
+            "username": "admin@example.test",
+            "password": "incorrect-password",
+            "role": "admin",
+        },
     )
-    assert admin.status_code == 401
+    assert invalid_real_admin.status_code == 401
+
+    demo_admin = TestClient(app)
+    admin = demo_admin.post(
+        "/api/auth/login",
+        json={"username": "", "password": "", "role": "admin"},
+    )
+    assert admin.status_code == 200
+    assert admin.json()["user"] == {
+        "username": "demo-admin@demo.invalid",
+        "role": "admin",
+    }
+    demo_admin.headers["Cookie"] = f"eka_session={demo_admin.cookies['eka_session']}"
+    demo_admin.headers["X-CSRF-Token"] = admin.json()["csrf_token"]
+    assert demo_admin.get("/app/demo-admin.html").status_code == 200
+    assert demo_admin.get("/app/documents.html", follow_redirects=False).status_code == 303
+    assert demo_admin.get("/app/analytics.html", follow_redirects=False).status_code == 303
+    for path in (
+        "/api/documents",
+        "/api/analytics",
+        "/api/eval/summary",
+        "/api/eval/latest",
+        "/api/metrics",
+    ):
+        assert demo_admin.get(path).status_code == 403
+    assert demo_admin.post("/api/seed").status_code == 403
+    assert demo_admin.post(
+        "/api/documents/upload",
+        data={"agent": "hr"},
+        files={"file": ("example.txt", b"sample", "text/plain")},
+    ).status_code == 403
+    assert demo_admin.delete("/api/documents/hr/example.txt").status_code == 403
+
+    employee_cannot_open_demo_admin = TestClient(app)
+    authenticate_client(employee_cannot_open_demo_admin, "employee")
+    denied_demo_page = employee_cannot_open_demo_admin.get(
+        "/app/demo-admin.html", follow_redirects=False
+    )
+    assert denied_demo_page.status_code == 303
 
     provisioned_admin = client.post(
         "/api/auth/login",
@@ -122,6 +189,31 @@ def test_public_demo_login_is_employee_only(monkeypatch):
     )
     assert provisioned_admin.status_code == 200
     assert provisioned_admin.json()["user"]["role"] == "admin"
+    assert provisioned_admin.json()["user"]["username"] == "admin@example.test"
+    real_admin = TestClient(app)
+    real_admin.headers["Cookie"] = f"eka_session={client.cookies['eka_session']}"
+    assert real_admin.get("/api/documents").status_code == 200
+
+
+def test_limited_demo_admin_identity_cannot_be_provisioned():
+    from app.auth import create_user
+
+    with pytest.raises(ValueError, match="reserved"):
+        create_user("demo-admin@demo.invalid", "a-long-test-password", "admin")
+
+
+def test_demo_login_does_not_rehash_identity_on_every_login(tmp_path, monkeypatch):
+    import app.auth as auth
+
+    monkeypatch.setattr(settings, "auth_database_path", str(tmp_path / "auth.sqlite3"))
+    auth.initialize_auth_store()
+    auth.authenticate_demo("admin")
+
+    def unexpected_rehash(*args, **kwargs):
+        pytest.fail("existing demo identity should not be rehashed per login")
+
+    monkeypatch.setattr(auth, "_hash_password", unexpected_rehash)
+    assert auth.authenticate_demo("admin").username == "demo-admin@demo.invalid"
 
 
 def test_logout_invalidates_session():

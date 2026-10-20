@@ -7,6 +7,7 @@ Run with:
 from __future__ import annotations
 
 import logging
+import os
 import time
 import uuid
 from contextlib import asynccontextmanager
@@ -20,8 +21,8 @@ from fastapi.responses import RedirectResponse
 
 from app.api.auth_routes import router as auth_router
 from app.api.routes import router as api_router
-from app.auth import SESSION_COOKIE, get_session_user, initialize_auth_store
-from app.config import settings
+from app.auth import SESSION_COOKIE, get_session_user, initialize_auth_store, is_demo_admin
+from app.config import is_llm_enabled, settings
 from app.request_context import reset_request_id, set_request_id
 
 
@@ -45,37 +46,91 @@ def _require_production_knowledge_base(chunk_counts: dict[str, int]) -> None:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Startup + shutdown hooks."""
-    # Startup
+    startup_start = time.perf_counter()
+    startup_issues: list[str] = []
+    app.state.readiness = {"ready": False, "issues": ["startup_in_progress"]}
+    startup_stage = "auth_store"
     logger.info("Starting %s v%s", settings.app_name, settings.app_version)
-    logger.info("Environment: %s", settings.environment)
-    logger.info("Vector DB path: %s", settings.vector_db_path)
-    logger.info("Embedding model: %s", settings.embedding_model)
-    initialize_auth_store()
+    logger.info(
+        "Startup configuration environment=%s port_configured=%s render_port=%s "
+        "llm_provider=%s model=%s llm_key_configured=%s",
+        settings.environment,
+        bool(os.getenv("PORT")),
+        os.getenv("PORT", "unset"),
+        settings.llm_provider,
+        settings.gemini_model if settings.llm_provider == "gemini" else settings.openai_model,
+        is_llm_enabled(),
+    )
+    try:
+        logger.info("Startup stage=auth_store status=starting")
+        initialize_auth_store()
+        logger.info("Startup stage=auth_store status=complete")
 
-    from app.rag.llm import llm_provider_name
-    logger.info("LLM provider: %s", llm_provider_name())
+        from app.rag.llm import llm_provider_name
+        logger.info("Startup configured language-model provider=%s", llm_provider_name())
 
-    # Auto-seed sample docs on first local development run.
-    from app.rag.vectorstore import count_chunks
+        from app.rag.vectorstore import count_chunks
 
-    agents = [item.strip() for item in settings.enabled_agents.split(",") if item.strip()]
-    chunk_counts = {agent: count_chunks(agent) for agent in agents}
-    _require_production_knowledge_base(chunk_counts)
-    if sum(chunk_counts.values()) == 0:
-        from app.ingestion.ingest import seed_sample_docs
-
-        logger.info("Vector DB is empty — seeding sample documents...")
-        try:
-            results = seed_sample_docs()
-            seeded = len([r for r in results if "error" not in r])
-            logger.info("Seeded %d sample documents", seeded)
-        except Exception as exc:
-            logger.warning("Auto-seed failed: %s. Run /api/seed manually.", exc)
-    else:
+        agents = [
+            item.strip()
+            for item in settings.enabled_agents.split(",")
+            if item.strip()
+        ]
+        startup_stage = "knowledge_base_check"
         logger.info(
-            "Vector DB chunk counts by agent=%s",
+            "Startup stage=knowledge_base_check status=starting agents=%s",
+            ",".join(agents),
+        )
+        chunk_counts = {agent: count_chunks(agent) for agent in agents}
+        logger.info(
+            "Startup knowledge_base_chunks=%s",
             ",".join(f"{agent}:{count}" for agent, count in chunk_counts.items()),
         )
+        missing_agents = [agent for agent, count in chunk_counts.items() if count == 0]
+
+        if missing_agents and settings.environment != "prod":
+            startup_stage = "sample_seed"
+            from app.ingestion.ingest import seed_sample_docs
+
+            logger.info(
+                "Startup stage=sample_seed status=starting missing_agents=%s",
+                ",".join(missing_agents),
+            )
+            results = seed_sample_docs()
+            seeded = len([item for item in results if "error" not in item])
+            logger.info("Startup stage=sample_seed status=complete documents_seeded=%d", seeded)
+            chunk_counts = {agent: count_chunks(agent) for agent in agents}
+            missing_agents = [agent for agent, count in chunk_counts.items() if count == 0]
+
+        if missing_agents:
+            startup_issues.append("knowledge_base_missing:" + ",".join(missing_agents))
+            logger.error(
+                "Startup readiness failure stage=knowledge_base_check missing_agents=%s",
+                ",".join(missing_agents),
+            )
+            if settings.environment == "prod":
+                try:
+                    _require_production_knowledge_base(chunk_counts)
+                except RuntimeError as exc:
+                    logger.error("Production knowledge-base validation failed: %s", exc)
+        if not is_llm_enabled():
+            startup_issues.append("language_model_not_configured")
+            logger.error("Startup readiness failure stage=language_model reason=not_configured")
+    except Exception as exc:
+        startup_issues.append("startup_initialization_failed:" + startup_stage)
+        logger.exception(
+            "Startup initialization failed stage=%s error_type=%s",
+            startup_stage,
+            type(exc).__name__,
+        )
+
+    app.state.readiness = {"ready": not startup_issues, "issues": startup_issues}
+    logger.info(
+        "Startup complete ready=%s issues=%s elapsed_ms=%d",
+        not startup_issues,
+        ",".join(startup_issues) or "none",
+        int((time.perf_counter() - startup_start) * 1000),
+    )
 
     yield
 
@@ -123,11 +178,24 @@ async def block_private_frontend_paths(request: Request, call_next):
         ):
             return Response(status_code=404)
         page = components[-1] if components else ""
-        if page in {"portal.html", "chat.html", "documents.html", "analytics.html"}:
+        protected_pages = {
+            "portal.html",
+            "chat.html",
+            "documents.html",
+            "analytics.html",
+            "demo-admin.html",
+        }
+        if page in protected_pages:
             user = get_session_user(request.cookies.get(SESSION_COOKIE))
             if user is None:
                 return RedirectResponse("/app/index.html", status_code=303)
-            if page in {"documents.html", "analytics.html"} and user.role != "admin":
+            if page in {"documents.html", "analytics.html"} and (
+                user.role != "admin" or is_demo_admin(user)
+            ):
+                return RedirectResponse("/app/portal.html?access=denied", status_code=303)
+            if page == "demo-admin.html" and (
+                user.role != "admin" or not is_demo_admin(user)
+            ):
                 return RedirectResponse("/app/portal.html?access=denied", status_code=303)
     return await call_next(request)
 

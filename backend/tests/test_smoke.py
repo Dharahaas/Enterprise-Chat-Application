@@ -247,6 +247,58 @@ def test_health_endpoint_does_not_initialize_llm_or_embeddings(monkeypatch):
     assert response.json()["status"] == "ok"
 
 
+def test_health_endpoint_reports_degraded_readiness_with_http_503():
+    from fastapi.testclient import TestClient
+    from app.main import app
+
+    previous = getattr(app.state, "readiness", None)
+    app.state.readiness = {
+        "ready": False,
+        "issues": ["knowledge_base_missing:it"],
+    }
+    try:
+        response = TestClient(app).get("/api/health")
+    finally:
+        if previous is None:
+            del app.state.readiness
+        else:
+            app.state.readiness = previous
+
+    assert response.status_code == 503
+    assert response.json()["status"] == "degraded"
+    assert response.json()["readiness_issues"] == ["knowledge_base_missing:it"]
+
+
+def test_production_lifespan_reports_missing_collection_as_degraded(monkeypatch):
+    from fastapi.testclient import TestClient
+    from app.config import settings
+    from app.main import app
+    from app.rag import vectorstore
+
+    monkeypatch.setattr(settings, "environment", "prod")
+    monkeypatch.setattr(settings, "enabled_agents", "hr,it,policy")
+    monkeypatch.setattr("app.main.initialize_auth_store", lambda: None)
+    monkeypatch.setattr("app.main.is_llm_enabled", lambda: True)
+    monkeypatch.setattr(
+        vectorstore,
+        "count_chunks",
+        lambda agent: 1 if agent != "it" else 0,
+    )
+    previous = getattr(app.state, "readiness", None)
+    try:
+        with TestClient(app) as client:
+            response = client.get("/api/health")
+    finally:
+        if previous is None:
+            del app.state.readiness
+        else:
+            app.state.readiness = previous
+
+    assert response.status_code == 503
+    assert response.json()["status"] == "degraded"
+    assert "knowledge_base_missing:it" in response.json()["readiness_issues"]
+
+
 def test_chat_handler_runs_outside_the_event_loop():
     import inspect
     from app.api.routes import chat

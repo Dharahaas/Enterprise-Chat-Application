@@ -34,6 +34,9 @@ _COMMON_CORRECTIONS = {
     "helo": "hello",
     "helllo": "hello",
     "thx": "thanks",
+    "thnks": "thanks",
+    "thankyou": "thank you",
+    "thanku": "thank you",
     "ty": "thanks",
     "wht": "what",
     "wat": "what",
@@ -117,11 +120,17 @@ def classify_conversation_intent(question: str) -> str | None:
         q,
     ):
         return "greeting"
-    if re.fullmatch(r"(?:thanks?|thank you)(?: so much| a lot)?", q):
+    thank_you = r"(?:thanks?|thank you)(?: so much| a lot)?"
+    acknowledgement = (
+        r"(?:ok(?:ay)?|all right|alright|got it|understood|noted|sure|"
+        r"sounds good|makes sense|cool)"
+    )
+    if re.fullmatch(thank_you, q) or re.fullmatch(
+        rf"{acknowledgement} (?:and )?{thank_you}", q
+    ):
         return "thanks"
     if re.fullmatch(
-        r"(?:ok(?:ay)?|all right|alright|got it|understood|noted|sure|"
-        r"sounds good|makes sense|cool)(?: (?:and )?(?:thanks?|got it))?",
+        rf"{acknowledgement}(?: (?:and )?got it)?",
         q,
     ):
         return "acknowledgement"

@@ -9,7 +9,16 @@ from pathlib import Path
 from time import perf_counter
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
+from fastapi import (
+    APIRouter,
+    Depends,
+    File,
+    Form,
+    HTTPException,
+    Request,
+    Response,
+    UploadFile,
+)
 from fastapi.responses import JSONResponse, PlainTextResponse
 from starlette.concurrency import run_in_threadpool
 
@@ -48,12 +57,17 @@ _QUERY_LOG: list[dict] = []
 # ---------- Health ----------
 
 @router.get("/health", response_model=HealthResponse)
-async def health() -> HealthResponse:
+async def health(request: Request, response: Response) -> HealthResponse:
     from app.config import agent_collections
     from app.rag.llm import llm_provider_name
 
+    readiness = getattr(request.app.state, "readiness", None)
+    readiness_issues = list(readiness.get("issues", [])) if readiness else []
+    ready = bool(readiness.get("ready", True)) if readiness else True
+    if not ready:
+        response.status_code = 503
     return HealthResponse(
-        status="ok",
+        status="ok" if ready else "degraded",
         version=settings.app_version,
         openai_enabled=is_openai_enabled(),
         llm_enabled=is_llm_enabled(),
@@ -61,6 +75,7 @@ async def health() -> HealthResponse:
         vector_db_path=settings.vector_db_path,
         agents=settings.enabled_agents.split(","),
         collections=agent_collections(),
+        readiness_issues=readiness_issues,
     )
 
 

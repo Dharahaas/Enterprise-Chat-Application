@@ -42,7 +42,7 @@
           <label class="login-role-option">
             <input type="radio" name="role" value="admin" />
             <span class="login-role-icon" aria-hidden="true">A</span>
-            <span><strong>Administrator</strong><small>Portal, documents and analytics</small></span>
+            <span><strong>Administrator</strong><small>Admin tools or limited demo</small></span>
           </label>
         </fieldset>
         <label class="form-label" for="username">Username or email</label>
@@ -51,7 +51,7 @@
         <input class="form-input" id="password" name="password" type="password" autocomplete="current-password" required maxlength="1024" />
         <p class="login-error" id="loginError" role="alert" aria-live="polite"></p>
         <button class="btn btn-primary btn-block btn-lg" id="loginButton" type="submit">Continue as Employee</button>
-        <p class="portal-login-help">Employee access cannot open document management or analytics.</p>
+        <p class="portal-login-help">Public demo administrators get a synthetic dashboard and the same assistant access as employees. Real admin tools require a provisioned administrator account.</p>
       </form>
     </section>
   </main>
@@ -61,6 +61,8 @@
     const loginButton = document.getElementById('loginButton');
     const loginError = document.getElementById('loginError');
     const loginDemoNote = document.getElementById('loginDemoNote');
+    const usernameInput = document.getElementById('username');
+    const passwordInput = document.getElementById('password');
     const roleOptions = [...document.querySelectorAll('input[name="role"]')];
     let loginOptions = { demo_login_enabled: false, demo_admin_login_enabled: false };
 
@@ -68,6 +70,11 @@
     const updateRoleLabel = () => {
       const role = selectedRole();
       loginButton.textContent = `Continue as ${role === 'admin' ? 'Administrator' : 'Employee'}`;
+      const demoAdmin = role === 'admin' && loginOptions.demo_admin_login_enabled;
+      usernameInput.required = !demoAdmin;
+      passwordInput.required = !demoAdmin;
+      usernameInput.placeholder = demoAdmin ? 'Optional for the limited public demo' : '';
+      passwordInput.placeholder = demoAdmin ? 'Optional for the limited public demo' : '';
     };
     roleOptions.forEach(option => option.addEventListener('change', updateRoleLabel));
 
@@ -77,12 +84,13 @@
         loginDemoNote.textContent = 'Evaluation demo access is not production authentication. Do not enter sensitive information.';
         loginDemoNote.hidden = false;
       }
+      updateRoleLabel();
     }).catch(error => {
       console.warn('[EKA] Could not load sign-in options.', error);
     });
 
-    API.session().then(() => {
-      window.location.replace('portal.html');
+    API.session().then(user => {
+      window.location.replace(user.username === 'demo-admin@demo.invalid' ? 'demo-admin.html' : 'portal.html');
     }).catch(error => {
       const params = new URLSearchParams(location.search);
       if (params.get('error') === 'unavailable' || error.status !== 401) {
@@ -96,22 +104,14 @@
       loginButton.disabled = true;
       loginButton.textContent = 'Signing in…';
       try {
-        await API.login(
+        const user = await API.login(
           document.getElementById('username').value.trim(),
           document.getElementById('password').value,
           selectedRole(),
         );
-        window.location.replace('portal.html');
+        window.location.replace(user.username === 'demo-admin@demo.invalid' ? 'demo-admin.html' : 'portal.html');
       } catch (error) {
-        if (
-          selectedRole() === 'admin' &&
-          loginOptions.demo_login_enabled &&
-          !loginOptions.demo_admin_login_enabled
-        ) {
-          loginError.textContent = 'Dummy administrator sign-in is disabled for this public demo. Use a provisioned administrator account, or choose Employee for demo access.';
-        } else {
-          loginError.textContent = error.message || 'Sign-in failed. Please try again.';
-        }
+        loginError.textContent = error.message || 'Sign-in failed. Please try again.';
       } finally {
         loginButton.disabled = false;
         updateRoleLabel();
