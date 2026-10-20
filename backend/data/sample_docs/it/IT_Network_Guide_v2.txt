@@ -1,0 +1,24 @@
+IT NETWORK GUIDE v2
+
+Section 2: VPN Configuration
+
+macOS:
+1. Install Cisco AnyConnect Secure Mobility Client from the IT Self-Service Portal
+2. Open AnyConnect
+3. Enter vpn.company.com as the host
+4. Sign in with corporate credentials (employee_id@company.com)
+5. Enter 2FA token from Microsoft Authenticator
+6. Once connected, you will receive a 10.x.x.x internal IP
+
+Windows:
+1. Same client, same flow
+2. Auto-launches on startup if configured
+
+Linux:
+1. Use openconnect CLI: sudo openconnect vpn.company.com
+2. Provide credentials when prompted
+
+Troubleshooting:
+- If MFA fails: re-register Microsoft Authenticator via IT Portal
+- If connection drops: check firewall allows UDP 443 and 500
+- Contact IT desk: ext. 4500 or it@company.com

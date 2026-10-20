@@ -1,0 +1,32 @@
+services:
+  - type: web
+    name: northstar-knowledge-assistant
+    runtime: python
+    plan: free
+    buildCommand: >-
+      pip install -r backend/requirements.txt &&
+      cd backend &&
+      python -c "from app.config import settings; from app.ingestion.ingest import seed_sample_docs; from app.rag.vectorstore import count_chunks; seed_sample_docs(); counts = {agent.strip(): count_chunks(agent.strip()) for agent in settings.enabled_agents.split(',') if agent.strip()}; print('Render sample knowledge base chunks:', counts); assert counts and all(counts.values()), 'Sample Chroma collections must be built for every enabled agent'"
+    startCommand: cd backend && uvicorn app.main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /api/health
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.11.11
+      - key: ENVIRONMENT
+        value: prod
+      - key: LLM_PROVIDER
+        value: gemini
+      - key: GEMINI_MODEL
+        value: gemini-2.5-flash-lite
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: DEMO_AUTH_ENABLED
+        value: "true"
+      - key: DEMO_AUTH_PUBLIC
+        value: "true"
+      - key: VECTOR_DB_PATH
+        value: data/chroma_db
+      - key: AUTH_DATABASE_PATH
+        value: data/auth/auth.sqlite3
+      - key: HF_HOME
+        value: data/huggingface

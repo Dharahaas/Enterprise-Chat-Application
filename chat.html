@@ -1,0 +1,495 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="theme-color" content="#7357E8" />
+  <title>Chat · Enterprise Knowledge Assistant</title>
+  <link rel="icon" type="image/svg+xml" href="favicon.svg" />
+  <link rel="stylesheet" href="css/style.css" />
+  <link rel="stylesheet" href="css/pages.css" />
+</head>
+<body>
+  <script src="js/app.js"></script>
+  <script>
+    const chatParams = new URLSearchParams(location.search);
+    const embeddedMode = chatParams.get('embedded') === '1';
+    const requestedAgentId = chatParams.get('agent');
+    let activeAgent = AGENTS.find(agent => agent.id === requestedAgentId) || AGENTS[0];
+    let conversations = [];
+    let loadedConversationUser = null;
+    let currentConversationId = null;
+    let messages = [];
+    let backendLive = false;
+    const pendingConversations = new Set();
+
+    function chatStorageKey() {
+      const scope = localStorage.getItem(CHAT_USER_SCOPE_KEY);
+      return `eka-chat-conversations-v1:${appUser?.role || 'unknown'}:${scope || appUser?.username || 'unavailable'}`;
+    }
+
+    function loadConversations() {
+      try {
+        const data = JSON.parse(localStorage.getItem(chatStorageKey()) || '[]');
+        if (!Array.isArray(data)) throw new Error('Saved conversations are not a list.');
+        return data.filter(conversation =>
+          conversation &&
+          typeof conversation.id === 'string' &&
+          AGENTS.some(agent => agent.id === conversation.agent) &&
+          Array.isArray(conversation.messages)
+        );
+      } catch (error) {
+        console.error('[EKA] Could not load saved conversations:', error);
+        return [];
+      }
+    }
+
+    function persistConversations() {
+      try {
+        localStorage.setItem(chatStorageKey(), JSON.stringify(conversations));
+      } catch (error) {
+        console.error('[EKA] Could not save conversations in this browser:', error);
+      }
+    }
+
+    function escapeHtml(value) {
+      return String(value)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
+    }
+
+    function markdownToHtml(value) {
+      const lines = escapeHtml(value).split('\n');
+      const blocks = [];
+      let listType = '';
+      const inline = text => text
+        .replace(/\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/g, '<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>')
+        .replace(/`([^`]+)`/g, '<code>$1</code>')
+        .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
+        .replace(/(^|[^*])\*([^*]+)\*/g, '$1<em>$2</em>');
+      const closeList = () => {
+        if (listType) blocks.push(`</${listType}>`);
+        listType = '';
+      };
+
+      for (const rawLine of lines) {
+        const line = rawLine.trim();
+        if (!line) {
+          closeList();
+          continue;
+        }
+        const heading = line.match(/^(#{1,3})\s+(.+)$/);
+        const bullet = line.match(/^[-*]\s+(.+)$/);
+        const ordered = line.match(/^\d+[.)]\s+(.+)$/);
+        if (heading) {
+          closeList();
+          const level = heading[1].length;
+          blocks.push(`<h${level}>${inline(heading[2])}</h${level}>`);
+        } else if (bullet || ordered) {
+          const nextType = bullet ? 'ul' : 'ol';
+          if (listType !== nextType) {
+            closeList();
+            listType = nextType;
+            blocks.push(`<${listType}>`);
+          }
+          blocks.push(`<li>${inline((bullet || ordered)[1])}</li>`);
+        } else {
+          closeList();
+          blocks.push(`<p>${inline(line)}</p>`);
+        }
+      }
+      closeList();
+      return blocks.join('');
+    }
+
+    function createConversation(agentId) {
+      return {
+        id: globalThis.crypto?.randomUUID
+          ? globalThis.crypto.randomUUID()
+          : `${Date.now()}-${Math.random().toString(36).slice(2)}`,
+        agent: agentId,
+        title: '',
+        messages: [],
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      };
+    }
+
+    function getConversationTitle(conversation) {
+      const question = conversation.messages.find(message => message.role === 'user');
+      if (!question) return 'New conversation';
+      const title = question.content.replace(/\s+/g, ' ').trim();
+      return title.length > 48 ? `${title.slice(0, 45)}...` : title;
+    }
+
+    function timeAgo(value) {
+      const date = new Date(value);
+      if (Number.isNaN(date.getTime())) return '';
+      const elapsed = Date.now() - date.getTime();
+      if (elapsed < 60_000) return 'Just now';
+      if (elapsed < 3_600_000) return `${Math.floor(elapsed / 60_000)}m ago`;
+      if (elapsed < 86_400_000) return `${Math.floor(elapsed / 3_600_000)}h ago`;
+      if (elapsed < 172_800_000) return 'Yesterday';
+      return date.toLocaleDateString([], { month: 'short', day: 'numeric' });
+    }
+
+    function saveConversation(conversation) {
+      conversation.title = getConversationTitle(conversation);
+      conversation.updatedAt = new Date().toISOString();
+      if (!conversations.some(item => item.id === conversation.id)) {
+        conversations.push(conversation);
+      }
+      persistConversations();
+      renderConversationList();
+    }
+
+    function renderConversationList() {
+      const container = document.getElementById('conversationList');
+      if (!container) return;
+      const recent = [...conversations]
+        .filter(conversation => conversation.messages.some(message => message.role === 'user'))
+        .sort((a, b) => new Date(b.updatedAt) - new Date(a.updatedAt));
+      container.innerHTML = recent.length
+        ? recent.map(conversation => {
+          const agent = AGENTS.find(item => item.id === conversation.agent);
+          return `
+            <button class="conversation-item ${conversation.id === currentConversationId ? 'active' : ''}"
+              type="button" data-conversation-id="${escapeHtml(conversation.id)}"
+              aria-current="${conversation.id === currentConversationId ? 'true' : 'false'}">
+              <span class="conversation-item-title">${escapeHtml(conversation.title || getConversationTitle(conversation))}</span>
+              <span class="conversation-item-meta"><span class="agent-dot ${agent.id}"></span>${escapeHtml(agent.name)}<span>${escapeHtml(timeAgo(conversation.updatedAt))}</span></span>
+            </button>
+          `;
+        }).join('')
+        : '<p class="conversation-empty">Your saved conversations will appear here.</p>';
+    }
+
+    function openConversation(id) {
+      const conversation = conversations.find(item => item.id === id);
+      if (!conversation) return;
+      activeAgent = AGENTS.find(agent => agent.id === conversation.agent);
+      currentConversationId = conversation.id;
+      messages = conversation.messages;
+      const url = new URL(location.href);
+      url.searchParams.set('agent', activeAgent.id);
+      history.replaceState({}, '', url);
+      renderChatPage();
+    }
+
+    function getCurrentConversation() {
+      return conversations.find(item => item.id === currentConversationId);
+    }
+
+    function renderMessage(message) {
+      const isUser = message.role === 'user';
+      const agent = AGENTS.find(item => item.id === message.agent) || activeAgent;
+      return `
+        <article class="chat-message ${isUser ? 'user-message' : 'assistant-message'}">
+          <div class="message-avatar ${isUser ? 'user-avatar' : `agent-avatar ${agent.id}`}" aria-hidden="true">${isUser ? 'U' : agent.initial}</div>
+          <div class="message-column">
+            <div class="message-meta">
+              <span class="message-author">${isUser ? 'You' : escapeHtml(agent.name)}</span>
+              <time>${escapeHtml(message.time || '')}</time>
+              ${message.latencyMs ? `<span>${Number(message.latencyMs).toLocaleString()} ms</span>` : ''}
+            </div>
+            <div class="message-content">${markdownToHtml(message.content)}</div>
+            ${message.sources?.length ? renderSources(message.sources) : ''}
+          </div>
+        </article>
+      `;
+    }
+
+    function renderSources(sources) {
+      return `
+        <details class="source-details">
+          <summary>${sources.length} ${sources.length === 1 ? 'source' : 'sources'}</summary>
+          <ul class="source-list">
+            ${sources.map(source => `
+              <li class="source-item">
+                <svg viewBox="0 0 20 20" fill="none" aria-hidden="true"><path d="M5.5 2.75h6l4 4v10.5H5.5a1.75 1.75 0 0 1-1.75-1.75V4.5A1.75 1.75 0 0 1 5.5 2.75Z" stroke="currentColor" stroke-width="1.4"/><path d="M11.5 2.75v4h4M7 11h7M7 14h5" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>
+                <span>${escapeHtml(source.document || source.name || 'Document')}${source.page ? ` · p. ${escapeHtml(source.page)}` : ''}${source.section ? ` · § ${escapeHtml(source.section)}` : ''}</span>
+              </li>
+            `).join('')}
+          </ul>
+        </details>
+      `;
+    }
+
+    function renderEmptyState() {
+      return `
+        <div class="chat-welcome">
+          <div class="welcome-mark ${activeAgent.id}" aria-hidden="true">
+            <svg viewBox="0 0 24 24" fill="none"><path d="M12 3.5 14.1 9.9 20.5 12l-6.4 2.1L12 20.5l-2.1-6.4L3.5 12l6.4-2.1L12 3.5Z" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/><path d="m19 3 .6 1.8L21.5 5.5l-1.9.7L19 8l-.6-1.8-1.9-.7 1.9-.7L19 3Z" fill="currentColor"/></svg>
+          </div>
+          <p class="eyebrow">YOUR COMPANY KNOWLEDGE, CONNECTED</p>
+          <h1>How can we help you today?</h1>
+          <p class="welcome-copy">Choose a specialist, then ask a question. Answers are grounded in your company documents and include sources when available.</p>
+          <div class="welcome-agent-grid" role="group" aria-label="Choose an assistant">
+            ${AGENTS.map(agent => `
+              <button class="welcome-agent ${agent.id} ${agent.id === activeAgent.id ? 'selected' : ''}" type="button" data-agent-choice="${agent.id}" aria-pressed="${agent.id === activeAgent.id}">
+                <span class="welcome-agent-icon" aria-hidden="true">${escapeHtml(agent.initial)}</span>
+                <span class="welcome-agent-copy"><strong>${escapeHtml(agent.name)}</strong><span>${escapeHtml(agent.desc.split(',').slice(0, 2).join(' · '))}</span></span>
+                <svg class="welcome-agent-check" viewBox="0 0 20 20" fill="none" aria-hidden="true"><path d="m5 10 3.2 3.2L15 6.5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+              </button>
+            `).join('')}
+          </div>
+          <div class="prompt-heading"><span>TRY ASKING</span><span>Suggested for ${escapeHtml(activeAgent.name)}</span></div>
+          <div class="prompt-grid">
+            ${activeAgent.suggested.slice(0, 4).map(prompt => `
+              <button class="prompt-card" type="button" data-prompt="${escapeHtml(prompt.sub)}">
+                <span>${escapeHtml(prompt.title)}</span>
+                <svg viewBox="0 0 20 20" fill="none" aria-hidden="true"><path d="M4 10h12m-5-5 5 5-5 5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+              </button>
+            `).join('')}
+          </div>
+        </div>
+      `;
+    }
+
+    async function renderChatPage() {
+      const user = await requireAuth();
+      if (!user) return;
+      if (loadedConversationUser !== user.username) {
+        loadedConversationUser = user.username;
+        conversations = loadConversations();
+        const latest = latestConversationForAgent(activeAgent.id);
+        if (latest) {
+          currentConversationId = latest.id;
+          messages = latest.messages;
+        }
+      }
+      const mainContent = `
+        <div class="chat-workspace">
+          <aside class="conversation-rail" aria-label="Conversation history">
+            <div class="conversation-rail-heading">
+              <div><span class="eyebrow">YOUR WORKSPACE</span><h2>Conversations</h2></div>
+            </div>
+            <button class="new-conversation-link" type="button" onclick="startNewConversation()">
+              <svg viewBox="0 0 20 20" fill="none" aria-hidden="true"><path d="M10 4v12M4 10h12" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
+              New conversation
+            </button>
+            <div class="conversation-list-heading">RECENT</div>
+            <div class="conversation-list" id="conversationList"></div>
+            <div class="rail-footnote">History is saved in this browser.</div>
+          </aside>
+          <section class="chat-main" aria-label="Chat with ${escapeHtml(activeAgent.name)}">
+            <header class="chat-topbar">
+              <div class="active-agent">
+                <span class="agent-mark ${activeAgent.id}">${escapeHtml(activeAgent.initial)}</span>
+                <div><h1>${escapeHtml(activeAgent.name)}</h1><p>${escapeHtml(activeAgent.desc)}</p></div>
+              </div>
+              <div class="chat-topbar-tools">
+                ${embeddedMode ? `<label class="sr-only" for="embeddedAgentSelect">Choose an assistant</label>
+                  <select id="embeddedAgentSelect" class="embedded-agent-select" aria-label="Choose an assistant">
+                    ${AGENTS.map(agent => `<option value="${agent.id}" ${agent.id === activeAgent.id ? 'selected' : ''}>${escapeHtml(agent.name)}</option>`).join('')}
+                  </select>` : ''}
+                <div class="connection-state connecting" id="connectionState" role="status" aria-live="polite">
+                  <span class="connection-dot"></span>Connecting
+                </div>
+              </div>
+            </header>
+            <div class="chat-transcript" id="chatTranscript" aria-live="polite">
+              ${messages.length ? messages.map(renderMessage).join('') : renderEmptyState()}
+            </div>
+            <div class="composer-area">
+              <form class="composer" id="chatForm">
+                <label class="sr-only" for="composerInput">Message ${escapeHtml(activeAgent.name)}</label>
+                <textarea id="composerInput" rows="1" maxlength="2000" placeholder="Message ${escapeHtml(activeAgent.name)}…" oninput="updateComposer(this)" onkeydown="handleComposerKey(event)"></textarea>
+                <div class="composer-controls">
+                  <span class="composer-note">Enter to send <span aria-hidden="true">·</span> Shift + Enter for a new line</span>
+                  <button class="send-button" id="sendButton" type="submit" disabled aria-label="Send message">
+                    <svg viewBox="0 0 20 20" fill="none" aria-hidden="true"><path d="m3 9 13-6-4 14-3.1-5.2L3 9Z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/><path d="m8.9 11.8 3.8-4.1" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+                  </button>
+                </div>
+              </form>
+              <p class="composer-disclaimer">AI-generated responses can be inaccurate. Check the cited source documents.</p>
+            </div>
+          </section>
+        </div>
+      `;
+      if (embeddedMode) {
+        document.body.classList.add('embedded-chat');
+        document.body.innerHTML = `<div class="embedded-chat-root">${mainContent}</div>`;
+      } else {
+        if (!await mountShell('chat', 'Chat', 'Workspace / Chat', mainContent)) return;
+      }
+      renderConversationList();
+      document.getElementById('conversationList')?.addEventListener('click', event => {
+        const item = event.target.closest('[data-conversation-id]');
+        if (item) openConversation(item.dataset.conversationId);
+      });
+      document.querySelectorAll('[data-prompt]').forEach(button => {
+        button.addEventListener('click', () => submitQuestion(button.dataset.prompt));
+      });
+      document.querySelectorAll('[data-agent-choice]').forEach(button => {
+        button.addEventListener('click', () => switchAgent(button.dataset.agentChoice));
+      });
+      document.getElementById('chatForm').addEventListener('submit', event => {
+        event.preventDefault();
+        submitQuestion(document.getElementById('composerInput').value);
+      });
+      document.getElementById('embeddedAgentSelect')?.addEventListener('change', event => {
+        switchAgent(event.target.value);
+      });
+      scrollTranscriptToBottom();
+      API.isLive().then(isLive => {
+        backendLive = isLive;
+        const state = document.getElementById('connectionState');
+        if (!state) return;
+        state.className = `connection-state ${isLive ? 'connected' : 'disconnected'}`;
+        state.innerHTML = `<span class="connection-dot"></span>${isLive ? 'Connected' : 'Service unavailable'}`;
+      }).catch(error => {
+        console.error('[EKA] Could not check assistant availability:', error);
+        const state = document.getElementById('connectionState');
+        if (state) {
+          state.className = 'connection-state disconnected';
+          state.innerHTML = '<span class="connection-dot"></span>Service unavailable';
+        }
+      });
+    }
+
+    function latestConversationForAgent(agentId) {
+      return [...conversations]
+        .filter(conversation =>
+          conversation.agent === agentId &&
+          conversation.messages.some(message => message.role === 'user')
+        )
+        .sort((left, right) => new Date(right.updatedAt) - new Date(left.updatedAt))[0] || null;
+    }
+
+    function switchAgent(agentId) {
+      const nextAgent = AGENTS.find(agent => agent.id === agentId);
+      if (!nextAgent || nextAgent.id === activeAgent.id) return;
+      activeAgent = nextAgent;
+      const previousConversation = latestConversationForAgent(activeAgent.id);
+      currentConversationId = previousConversation?.id || null;
+      messages = previousConversation?.messages || [];
+      const url = new URL(location.href);
+      url.searchParams.set('agent', activeAgent.id);
+      history.replaceState({}, '', url);
+      renderChatPage();
+    }
+
+    if (embeddedMode) {
+      window.addEventListener('message', event => {
+        if (
+          event.origin !== location.origin ||
+          event.source !== window.parent ||
+          event.data?.type !== 'eka:select-agent'
+        ) return;
+        switchAgent(event.data.agent);
+      });
+    }
+
+    function startNewConversation() {
+      currentConversationId = null;
+      messages = [];
+      renderChatPage();
+    }
+
+    function updateComposer(input) {
+      input.style.height = 'auto';
+      input.style.height = `${Math.min(input.scrollHeight, 180)}px`;
+      document.getElementById('sendButton').disabled = !input.value.trim() || pendingConversations.has(currentConversationId);
+    }
+
+    function handleComposerKey(event) {
+      if (event.key === 'Enter' && !event.shiftKey) {
+        event.preventDefault();
+        document.getElementById('chatForm').requestSubmit();
+      }
+    }
+
+    function scrollTranscriptToBottom() {
+      const transcript = document.getElementById('chatTranscript');
+      if (transcript) transcript.scrollTop = transcript.scrollHeight;
+    }
+
+    async function submitQuestion(rawQuestion) {
+      const question = rawQuestion.trim();
+      if (!question || pendingConversations.has(currentConversationId)) return;
+
+      if (!currentConversationId) {
+        const conversation = createConversation(activeAgent.id);
+        conversations.unshift(conversation);
+        currentConversationId = conversation.id;
+        messages = conversation.messages;
+      }
+      const conversation = getCurrentConversation();
+      if (!conversation) return;
+
+      const requestAgent = AGENTS.find(agent => agent.id === conversation.agent);
+      const now = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+      conversation.messages.push({ role: 'user', content: question, agent: conversation.agent, time: now });
+      messages = conversation.messages;
+      saveConversation(conversation);
+
+      const input = document.getElementById('composerInput');
+      input.value = '';
+      input.style.height = 'auto';
+      const sendButton = document.getElementById('sendButton');
+      sendButton.disabled = true;
+      const transcript = document.getElementById('chatTranscript');
+      if (transcript.querySelector('.chat-welcome')) transcript.innerHTML = '';
+      transcript.insertAdjacentHTML('beforeend', renderMessage(conversation.messages.at(-1)));
+      transcript.insertAdjacentHTML('beforeend', `
+        <div class="chat-message assistant-message typing-message" id="typingMessage">
+          <div class="message-avatar agent-avatar ${requestAgent.id}" aria-hidden="true">${escapeHtml(requestAgent.initial)}</div>
+          <div class="message-column"><div class="message-meta"><span class="message-author">${escapeHtml(requestAgent.name)}</span><span>Searching sources</span></div><div class="typing-dots" role="status" aria-label="Generating response"><span></span><span></span><span></span></div></div>
+        </div>
+      `);
+      scrollTranscriptToBottom();
+      pendingConversations.add(conversation.id);
+      renderConversationList();
+
+      let reply;
+      try {
+        const response = await API.chat(question, conversation.agent);
+        reply = {
+          role: 'agent',
+          content: response.answer,
+          agent: response.agent,
+          sources: (response.sources || []).map(source => ({
+            document: source.document,
+            page: source.page,
+            section: source.section,
+          })),
+          time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+          latencyMs: response.latency_ms,
+          llmProvider: response.llm_provider === 'gemini'
+            ? 'Gemini Free Tier'
+            : response.llm_provider === 'openai'
+              ? 'OpenAI'
+              : response.llm_provider === 'unconfigured' ? 'Setup required' : '',
+        };
+      } catch (error) {
+        reply = {
+          role: 'agent',
+          content: error.message || 'The assistant could not complete this request. Please try again.',
+          agent: requestAgent.id,
+          sources: [],
+          time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+          isError: true,
+        };
+      }
+
+      conversation.messages.push(reply);
+      pendingConversations.delete(conversation.id);
+      saveConversation(conversation);
+      if (currentConversationId === conversation.id) {
+        messages = conversation.messages;
+        const typing = document.getElementById('typingMessage');
+        if (typing) typing.remove();
+        transcript.insertAdjacentHTML('beforeend', renderMessage(reply));
+        scrollTranscriptToBottom();
+        updateComposer(input);
+      }
+    }
+
+    renderChatPage();
+  </script>
+</body>
+</html>

@@ -1,0 +1,282 @@
+# Enterprise Knowledge Assistant — CI/CD Pipeline
+#
+# Triggers:
+#   - Push to main: build, test, deploy to GitHub Pages (frontend)
+#   - Tag v*: also build backend Docker image, push to GHCR, deploy to staging
+#   - Pull request: run tests only
+
+name: CI/CD
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+    branches: [main]
+
+env:
+  PYTHON_VERSION: '3.11'
+  NODE_VERSION: '20'
+
+jobs:
+  # ---------- Job 1: Test Backend ----------
+  test-backend:
+    name: Test Backend
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: 'pip'
+          cache-dependency-path: backend/requirements.txt
+
+      - name: Install CPU-only PyTorch
+        run: pip install torch --index-url https://download.pytorch.org/whl/cpu
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run smoke tests
+        run: pytest tests/ -v --tb=short
+
+      - name: Run RAGAS evaluation
+        run: |
+          python -c "
+          from app.eval import run_eval
+          report = run_eval(save_path='data/eval_reports/ci-latest.json')
+          print(f'Overall: {report.avg_overall:.3f}')
+          print(f'P95 latency: {report.p95_latency_ms}ms')
+          if report.avg_overall < 0.5:
+            print('::warning::Eval score below 0.5 — investigate RAG quality')
+          "
+
+      - name: Upload eval report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: eval-report
+          path: backend/data/eval_reports/
+
+  # ---------- Job 2: Lint Frontend ----------
+  lint-frontend:
+    name: Lint Frontend
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Validate HTML
+        run: |
+          # Basic HTML validation — check for unclosed tags
+          for f in *.html; do
+            echo "Checking $f..."
+            # Use a simple Python script to check basic structure
+            python3 -c "
+            import sys
+            content = open('$f').read()
+            errors = []
+            for tag in ['html', 'head', 'body']:
+              if content.count(f'<{tag}') != content.count(f'</{tag}>'):
+                errors.append(f'Unclosed <{tag}> tag')
+            if errors:
+              print('::error::' + ', '.join(errors))
+              sys.exit(1)
+            print('  ✓ $f valid')
+            "
+          done
+
+      - name: Validate JS syntax
+        run: |
+          for f in js/*.js; do
+            node --check "$f" && echo "  ✓ $f syntax OK"
+          done
+
+  # ---------- Job 3: Deploy Frontend to GitHub Pages ----------
+  deploy-pages:
+    name: Deploy to GitHub Pages
+    needs: [test-backend, lint-frontend]
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Pages
+        uses: actions/configure-pages@v5
+
+      - name: Upload artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: ./
+
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
+
+  # ---------- Job 4: Build + Push Docker Image ----------
+  build-docker:
+    name: Build & Push Docker Image
+    needs: [test-backend]
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ github.repository }}/eka-backend
+          tags: |
+            type=ref,event=tag
+            type=raw,value=latest
+            type=sha,prefix=,format=short
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: ./backend
+          file: ./backend/Dockerfile
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  # ---------- Job 5: Deploy to AWS (staging) ----------
+  deploy-aws:
+    name: Deploy to AWS Staging
+    needs: [build-docker]
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    environment: staging-aws
+    env:
+      AWS_REGION: us-east-1
+      ENV: staging
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Login to ECR
+        id: ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Build, tag, push backend image
+        env:
+          ECR_URI: ${{ steps.ecr.outputs.registry }}/${{ env.ENV }}/eka-backend
+        run: |
+          docker build -t eka-backend ./backend
+          docker tag eka-backend:latest $ECR_URI:latest
+          docker tag eka-backend:latest $ECR_URI:${{ github.sha }}
+          docker push $ECR_URI:latest
+          docker push $ECR_URI:${{ github.sha }}
+
+      - name: Sync frontend to S3
+        run: |
+          aws s3 sync ./ s3://${{ env.ENV }}-eka-frontend-${{ secrets.AWS_ACCOUNT_ID }}-${{ env.AWS_REGION }}/ \
+            --exclude "*" --include "*.html" --include "css/*" --include "js/*" \
+            --exclude "backend/*" --exclude "deploy/*" --exclude ".git/*" --delete
+
+      - name: Force ECS redeployment
+        run: |
+          aws ecs update-service \
+            --cluster ${{ env.ENV }}-eka-cluster \
+            --service ${{ env.ENV }}-eka-service \
+            --force-new-deployment
+
+  # ---------- Job 6: Run nightly RAGAS eval ----------
+  nightly-eval:
+    name: Nightly RAGAS Evaluation
+    if: github.event_name == 'schedule'
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install deps
+        run: |
+          pip install torch --index-url https://download.pytorch.org/whl/cpu
+          pip install -r requirements.txt
+
+      - name: Run eval
+        run: |
+          python -c "
+          from app.eval import run_eval
+          from app.ingestion.ingest import seed_sample_docs
+          seed_sample_docs(force=True)
+          report = run_eval(save_path='data/eval_reports/nightly-$(date +%Y-%m-%d).json')
+          print(f'Average overall: {report.avg_overall:.3f}')
+          print(f'P95 latency: {report.p95_latency_ms}ms')
+          "
+
+      - name: Upload nightly report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: nightly-eval-${{ github.run_id }}
+          path: backend/data/eval_reports/
+          retention-days: 90
+
+  # ---------- Job 7: Security scan ----------
+  security-scan:
+    name: Security Scan
+    runs-on: ubuntu-latest
+    permissions:
+      security-events: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run Trivy vulnerability scanner
+        uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: 'fs'
+          scan-ref: '.'
+          severity: 'CRITICAL,HIGH'
+          format: 'sarif'
+          output: 'trivy-results.sarif'
+
+      - name: Upload Trivy results to GitHub Security tab
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: 'trivy-results.sarif'

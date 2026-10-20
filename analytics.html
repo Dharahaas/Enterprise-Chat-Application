@@ -1,0 +1,177 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="theme-color" content="#7357E8" />
+  <title>Analytics · Enterprise Knowledge Assistant</title>
+  <link rel="icon" type="image/svg+xml" href="favicon.svg" />
+  <link rel="stylesheet" href="css/style.css" />
+  <link rel="stylesheet" href="css/pages.css" />
+</head>
+<body>
+  <script src="js/app.js"></script>
+  <script>
+    let analyticsData = null;
+    let latestEvaluation = null;
+    let analyticsError = '';
+    let loadingAnalytics = true;
+
+    function escapeHtml(value) {
+      return String(value ?? '')
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
+    }
+
+    function isSampleAnalytics(data) {
+      return Number(data?.unique_users) > 1;
+    }
+
+    function renderActivityChart(days) {
+      const entries = Object.entries(days || {}).sort(([a], [b]) => a.localeCompare(b)).slice(-14);
+      if (!entries.length) return '<div class="chart-empty">No query activity has been recorded yet.</div>';
+      const maximum = Math.max(...entries.map(([, count]) => Number(count) || 0), 1);
+      return `<div class="activity-chart" role="img" aria-label="Queries by day">${entries.map(([date, count]) => {
+        const value = Number(count) || 0;
+        const height = Math.max(value ? 5 : 0, value / maximum * 100);
+        return `<div class="activity-bar-column" title="${escapeHtml(date)}: ${value} queries"><span>${value}</span><div style="height:${height}%"></div><small>${escapeHtml(new Date(`${date}T00:00:00`).toLocaleDateString([], { month: 'short', day: 'numeric' }))}</small></div>`;
+      }).join('')}</div>`;
+    }
+
+    function renderAgentChart(byAgent) {
+      const entries = AGENTS.map(agent => ({ agent, count: Number(byAgent?.[agent.id]) || 0 }));
+      const max = Math.max(...entries.map(item => item.count), 1);
+      if (entries.every(item => item.count === 0)) return '<div class="chart-empty">Agent activity will appear here after requests are made.</div>';
+      return `<div class="agent-activity">${entries.map(({ agent, count }) => `
+        <div class="agent-activity-row">
+          <div class="agent-activity-label"><span class="agent-dot ${agent.id}"></span><span>${escapeHtml(agent.name)}</span><strong>${count.toLocaleString()}</strong></div>
+          <div class="activity-track"><span class="activity-fill ${agent.id}" style="width:${count / max * 100}%"></span></div>
+        </div>
+      `).join('')}</div>`;
+    }
+
+    function renderEvaluationSummary(report) {
+      if (!report || !Array.isArray(report.results)) {
+        return '<div class="evaluation-empty">No completed evaluation is available. Run an evaluation to view its measured results.</div>';
+      }
+      return `
+        <div class="evaluation-summary">
+          <div class="evaluation-meta"><span>Completed ${escapeHtml(report.started_at || '—')}</span><span>${Number(report.total_questions || report.results.length)} questions · ${escapeHtml(report.duration_sec ?? '—')} sec</span></div>
+          <div class="evaluation-metrics">
+            ${[['Faithfulness', 'avg_faithfulness'], ['Answer relevancy', 'avg_answer_relevancy'], ['Context precision', 'avg_context_precision'], ['Context recall', 'avg_context_recall']].map(([label, key]) => `<div><span>${label}</span><strong>${Number.isFinite(Number(report[key])) ? Number(report[key]).toFixed(3) : '—'}</strong></div>`).join('')}
+          </div>
+          <div class="evaluation-results">${report.results.slice(0, 8).map(item => `
+            <div class="evaluation-row"><span class="agent-label ${escapeHtml(item.agent)}">${escapeHtml(item.agent)}</span><span class="evaluation-question">${escapeHtml(item.question)}</span><strong>${Number.isFinite(Number(item.overall)) ? `${(Number(item.overall) * 100).toFixed(1)}%` : '—'}</strong></div>
+          `).join('')}</div>
+        </div>
+      `;
+    }
+
+    function renderAnalytics() {
+      const root = document.getElementById('analyticsContent');
+      if (loadingAnalytics) {
+        root.innerHTML = '<div class="analytics-state"><span class="spinner"></span><p>Loading backend metrics…</p></div>';
+        return;
+      }
+      if (analyticsError) {
+        root.innerHTML = `<div class="analytics-state analytics-error"><p>${escapeHtml(analyticsError)}</p><button type="button" class="secondary-button" onclick="loadAnalytics()">Try again</button></div>`;
+        return;
+      }
+      if (!analyticsData) {
+        root.innerHTML = '<div class="analytics-state"><p>No analytics data is available.</p></div>';
+        return;
+      }
+
+      const sampleData = isSampleAnalytics(analyticsData);
+      const liveMetrics = !sampleData && Number(analyticsData.queries_this_week) > 0;
+      root.innerHTML = `
+        ${sampleData ? '<div class="sample-data-notice" role="note"><span class="notice-mark">i</span><p>The backend currently reports sample analytics rather than recorded activity. Live charts will appear after real chat requests are recorded.</p></div>' : ''}
+        <div class="analytics-status"><span class="connection-dot ${liveMetrics ? 'connected' : ''}"></span>${liveMetrics ? 'Showing recorded backend activity' : 'Waiting for recorded activity'}</div>
+        ${liveMetrics ? `
+          <section class="analytics-highlights">
+            <article class="metric-card"><span class="metric-label">Recorded queries</span><strong>${Number(analyticsData.queries_this_week).toLocaleString()}</strong><span class="metric-context">Recorded by this backend process</span></article>
+            <article class="metric-card"><span class="metric-label">Median response time</span><strong>${Number(analyticsData.p50_latency_ms).toLocaleString()}<small>ms</small></strong><span class="metric-context">P50 of recorded chat requests</span></article>
+            <article class="metric-card"><span class="metric-label">95th percentile</span><strong>${Number(analyticsData.p95_latency_ms).toLocaleString()}<small>ms</small></strong><span class="metric-context">P95 of recorded chat requests</span></article>
+          </section>
+          <section class="analytics-grid">
+            <article class="analytics-panel"><div class="panel-heading"><div><h2>Query activity</h2><p>Recorded requests by day</p></div><span class="panel-unit">REQUESTS</span></div>${renderActivityChart(analyticsData.queries_by_day)}</article>
+            <article class="analytics-panel"><div class="panel-heading"><div><h2>Agent usage</h2><p>Recorded requests by agent</p></div><span class="panel-unit">REQUESTS</span></div>${renderAgentChart(analyticsData.queries_by_agent)}</article>
+          </section>
+        ` : `
+          <section class="analytics-empty-panel">
+            <div class="analytics-empty-mark"><svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M4 19V5m0 14h16M8 15v-3m4 3V8m4 7v-5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg></div>
+            <h2>Analytics will build as you work</h2>
+            <p>Activity counts and response timings are held in memory by the current backend process. Send chat questions to start collecting activity; those counters reset when the backend restarts.</p>
+          </section>
+        `}
+        <section class="evaluation-panel">
+          <div class="panel-heading"><div><h2>Retrieval evaluation</h2><p>Metrics from the latest completed evaluation run</p></div><div class="evaluation-actions"><button type="button" class="secondary-button" onclick="loadLatestEvaluation()">Refresh result</button><button id="runEvalButton" type="button" class="primary-button" onclick="runEvaluation()">Run evaluation</button></div></div>
+          <div id="evaluationResult">${renderEvaluationSummary(latestEvaluation)}</div>
+        </section>
+      `;
+    }
+
+    async function loadAnalytics() {
+      loadingAnalytics = true;
+      analyticsError = '';
+      renderAnalytics();
+      try {
+        const [metrics, evaluation] = await Promise.all([API.analytics(), API.evalLatest()]);
+        analyticsData = metrics;
+        latestEvaluation = evaluation && Array.isArray(evaluation.results) ? evaluation : null;
+      } catch (error) {
+        analyticsError = error.message || 'Unable to load backend analytics.';
+      } finally {
+        loadingAnalytics = false;
+        renderAnalytics();
+      }
+    }
+
+    async function loadLatestEvaluation() {
+      const resultArea = document.getElementById('evaluationResult');
+      if (resultArea) resultArea.innerHTML = '<div class="evaluation-empty"><span class="spinner"></span> Loading evaluation…</div>';
+      try {
+        const result = await API.evalLatest();
+        latestEvaluation = result && Array.isArray(result.results) ? result : null;
+        if (resultArea) resultArea.innerHTML = renderEvaluationSummary(latestEvaluation);
+      } catch (error) {
+        if (resultArea) resultArea.innerHTML = `<div class="evaluation-empty error-state">${escapeHtml(error.message)}</div>`;
+      }
+    }
+
+    async function runEvaluation() {
+      const button = document.getElementById('runEvalButton');
+      const resultArea = document.getElementById('evaluationResult');
+      if (!button || !resultArea) return;
+      button.disabled = true;
+      button.textContent = 'Evaluation running…';
+      resultArea.innerHTML = '<div class="evaluation-empty"><span class="spinner"></span> Running the backend evaluation. This may take a few minutes.</div>';
+      try {
+        latestEvaluation = await API.evalRun();
+        resultArea.innerHTML = renderEvaluationSummary(latestEvaluation);
+      } catch (error) {
+        resultArea.innerHTML = `<div class="evaluation-empty error-state">${escapeHtml(error.message || 'Evaluation could not be completed.')}</div>`;
+      } finally {
+        button.disabled = false;
+        button.textContent = 'Run evaluation';
+      }
+    }
+
+    async function renderAnalyticsPage() {
+      const mainContent = `
+        <section class="page analytics-page">
+          <div class="page-intro"><div><p class="eyebrow">OBSERVABILITY</p><h1>Analytics</h1><p>Backend-recorded usage and evaluation results. Sample values are identified rather than presented as live activity.</p></div><button class="secondary-button" type="button" onclick="loadAnalytics()"><svg viewBox="0 0 20 20" fill="none" aria-hidden="true"><path d="M16.5 7.5A6.75 6.75 0 0 0 4 6l-1.5 1.5M3.5 4.5v3h3m-3 5A6.75 6.75 0 0 0 16 14l1.5-1.5m0 3v-3h-3" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>Refresh</button></div>
+          <div id="analyticsContent"></div>
+        </section>
+      `;
+      if (!await mountShell('analytics', 'Analytics', 'Workspace / Analytics', mainContent, '', 'admin')) return;
+      loadAnalytics();
+    }
+
+    renderAnalyticsPage();
+  </script>
+</body>
+</html>

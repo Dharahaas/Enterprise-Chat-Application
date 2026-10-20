@@ -1,0 +1,155 @@
+"""Language-model client configuration."""
+
+from __future__ import annotations
+
+import logging
+import os
+import re
+from typing import Any
+
+from app.config import is_llm_enabled, settings
+
+logger = logging.getLogger(__name__)
+
+LLM_NOT_CONFIGURED_MESSAGE = (
+    "A language model is not configured for this assistant yet. To generate "
+    "grounded answers, set GEMINI_API_KEY in backend/.env "
+    "and restart the backend."
+)
+
+
+class LLMNotConfiguredError(RuntimeError):
+    """Raised when no supported generation provider is configured."""
+
+
+class LLMConfigurationError(RuntimeError):
+    """Raised when the configured provider cannot be initialized."""
+
+
+def llm_model_name() -> str:
+    """Return the configured model identifier without exposing credentials."""
+    if settings.llm_provider == "gemini":
+        return settings.gemini_model.strip()
+    return settings.openai_model.strip()
+
+
+def diagnose_llm_error(
+    exc: Exception,
+) -> tuple[str, int | None, str | None, str]:
+    """Extract safe provider diagnostics without logging prompts or credentials."""
+    response = getattr(exc, "response", None)
+    status = getattr(exc, "status_code", None) or getattr(
+        response, "status_code", None
+    )
+    if not isinstance(status, int):
+        status = None
+
+    body = getattr(exc, "body", None)
+    error_body = body.get("error", body) if isinstance(body, dict) else {}
+    code = error_body.get("code") or error_body.get("status") if isinstance(
+        error_body, dict
+    ) else None
+    code = code or getattr(exc, "code", None)
+    message = (
+        error_body.get("message")
+        if isinstance(error_body, dict)
+        else None
+    ) or getattr(exc, "message", None) or str(exc)
+    message = str(message).replace("\r", " ").replace("\n", " ").strip()
+
+    configured_key = settings.gemini_api_key or settings.openai_api_key
+    configured_key = configured_key or os.getenv("GEMINI_API_KEY", "")
+    if configured_key:
+        message = message.replace(configured_key, "[REDACTED]")
+    message = re.sub(r"(?i)\bBearer\s+\S+", "Bearer [REDACTED]", message)
+    message = re.sub(r"(?i)\bAIza[0-9A-Za-z_-]{20,}\b", "[REDACTED]", message)
+    message = re.sub(r"(?i)\bsk-[0-9A-Za-z_-]{8,}\b", "[REDACTED]", message)
+    message = re.sub(
+        r"(?i)(api[_ -]?key|authorization|token)(\s*[:=]\s*)[^,\s;}]+",
+        r"\1\2[REDACTED]",
+        message,
+    )[:300]
+
+    error_code = str(code) if code is not None else ""
+    error_name = type(exc).__name__.casefold()
+    code_name = error_code.casefold()
+    if status == 429 or "quota" in code_name or "resource_exhausted" in code_name:
+        category = "quota"
+    elif status in {401, 403} or any(
+        value in code_name for value in ("unauthenticated", "permission_denied")
+    ):
+        category = "authentication"
+    elif status == 404 or any(
+        value in code_name for value in ("model_not_found", "not_found")
+    ):
+        category = "model_unavailable"
+    elif (
+        "connection" in error_name
+        or "timeout" in error_name
+        or isinstance(exc, (ConnectionError, TimeoutError))
+    ):
+        category = "network"
+    else:
+        category = "provider_error"
+    return category, status, error_code or None, message
+
+
+def get_llm() -> Any:
+    """Create the configured chat model; never substitute a template answer."""
+    if not is_llm_enabled():
+        raise LLMNotConfiguredError(LLM_NOT_CONFIGURED_MESSAGE)
+
+    try:
+        from langchain_openai import ChatOpenAI
+
+        if settings.llm_provider == "gemini":
+            model = settings.gemini_model.strip()
+            if model != "gemini-2.5-flash-lite":
+                raise ValueError(
+                    "Gemini configuration only permits gemini-2.5-flash-lite"
+                )
+            api_key = settings.gemini_api_key.strip() or os.getenv(
+                "GEMINI_API_KEY", ""
+            ).strip()
+            return ChatOpenAI(
+                model=model,
+                api_key=api_key,
+                base_url="https://generativelanguage.googleapis.com/v1beta/openai/",
+                temperature=settings.llm_temperature,
+                max_tokens=settings.llm_max_tokens,
+                timeout=60,
+                max_retries=1,
+            )
+
+        api_key = settings.openai_api_key.strip() or os.getenv(
+            "OPENAI_API_KEY", ""
+        ).strip()
+        return ChatOpenAI(
+            model=settings.openai_model,
+            api_key=api_key,
+            temperature=settings.llm_temperature,
+            max_tokens=settings.llm_max_tokens,
+            timeout=30,
+            max_retries=1,
+        )
+    except ValueError:
+        raise
+    except Exception as exc:
+        category, status, code, message = diagnose_llm_error(exc)
+        logger.error(
+            "LLM initialization failed stage=client provider=%s model=%s "
+            "category=%s http_status=%s provider_code=%s error_type=%s "
+            "provider_message=%s",
+            settings.llm_provider,
+            llm_model_name(),
+            category,
+            status,
+            code,
+            type(exc).__name__,
+            message,
+        )
+        raise LLMConfigurationError from exc
+
+
+def llm_provider_name() -> str:
+    return settings.llm_provider if is_llm_enabled() else "unconfigured"

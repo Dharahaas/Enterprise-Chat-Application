@@ -1,0 +1,39 @@
+# ============================================================
+# Enterprise Knowledge Assistant — Phase 2 dependencies
+# Versions are relaxed to avoid resolver conflicts.
+# ============================================================
+
+# Web framework
+fastapi>=0.115.0
+uvicorn[standard]>=0.32.0
+python-multipart>=0.0.12
+
+# LangChain orchestration (use compatible recent versions)
+langchain>=0.3.7
+langchain-core>=0.3.15
+langchain-community>=0.3.5
+langchain-chroma>=0.1.4
+langchain-huggingface>=0.1.2
+langchain-text-splitters>=0.3.3
+
+# Embeddings (local, no API key needed)
+sentence-transformers>=3.3.1
+
+# Vector store
+chromadb>=0.5.20
+
+# Document loaders
+pypdf>=5.1.0
+python-docx>=1.1.2
+
+# LLM providers (optional — only needed if using real LLM)
+langchain-openai>=0.2.5
+
+# Utilities
+pydantic>=2.9.2
+pydantic-settings>=2.6.0
+python-dotenv>=1.0.1
+
+# Testing
+pytest>=8.3.3
+httpx>=0.27.2

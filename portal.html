@@ -1,0 +1,175 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="theme-color" content="#7357E8" />
+  <title>Employee portal · Northstar</title>
+  <link rel="icon" type="image/svg+xml" href="favicon.svg" />
+  <link rel="stylesheet" href="css/style.css" />
+  <link rel="stylesheet" href="css/pages.css" />
+</head>
+<body class="employee-portal-page">
+  <div id="portalApp" class="portal-loading" role="status">Loading your company portal…</div>
+  <script src="js/app.js"></script>
+  <script>
+    let selectedAssistantAgent = 'hr';
+
+    function portalMarkup(user) {
+      const adminLinks = user.role === 'admin'
+        ? '<a href="documents.html">Documents</a><a href="analytics.html">Analytics</a>'
+        : '';
+      return `
+        <header class="portal-header">
+          <a class="portal-brand" href="#top" aria-label="Northstar portal home">
+            <span class="portal-brand-mark">N</span>
+            <span><strong>Northstar</strong><small>EMPLOYEE PORTAL</small></span>
+          </a>
+          <nav class="portal-nav" aria-label="Portal navigation">
+            <a href="#announcements">Announcements</a>
+            <a href="#resources">Resources</a>
+            <a href="#support">Support</a>
+            ${adminLinks}
+          </nav>
+          <div class="portal-account">
+            <span class="portal-account-avatar" aria-hidden="true">${escapeHTML(user.username.slice(0, 1).toUpperCase())}</span>
+            <span class="portal-account-name">${escapeHTML(user.username)}</span>
+            <button type="button" class="portal-signout" onclick="logout()">Sign out</button>
+          </div>
+        </header>
+        <main id="top" class="portal-main">
+          <div class="portal-demo-notice"><span aria-hidden="true">ⓘ</span> Northstar is a fictional company. Announcements and directory details below are sample demonstration content.</div>
+          ${new URLSearchParams(location.search).get('access') === 'denied'
+            ? '<p class="portal-access-notice" role="status">Administrator access is required for that page.</p>' : ''}
+          <section class="portal-hero" aria-labelledby="portalHeading">
+            <div class="portal-hero-copy">
+              <p class="eyebrow">NORTHSTAR WORKSPACE</p>
+              <h1 id="portalHeading">Good to have you here.</h1>
+              <p>Your company resources, people updates, and workplace help—together in one place.</p>
+              <button type="button" class="portal-hero-action" onclick="openAssistant('hr')">
+                <span class="portal-sparkle" aria-hidden="true">✦</span> Ask the company assistant
+              </button>
+            </div>
+            <div class="portal-hero-art" aria-hidden="true">
+              <div class="portal-orbit portal-orbit-one"></div><div class="portal-orbit portal-orbit-two"></div>
+              <div class="portal-hero-monogram">N</div><span class="portal-art-dot"></span>
+            </div>
+          </section>
+
+          <section id="announcements" class="portal-section">
+            <div class="portal-section-heading"><div><p class="eyebrow">FROM AROUND NORTHSTAR</p><h2>Company announcements</h2></div><span class="portal-sample-label">SAMPLE CONTENT</span></div>
+            <div class="portal-announcement-grid">
+              <article class="portal-announcement-card featured-announcement">
+                <span class="portal-card-icon announcement-icon-indigo" aria-hidden="true">✦</span>
+                <p class="portal-card-kicker">PEOPLE & CULTURE · SAMPLE</p>
+                <h3>Welcome to the refreshed employee hub</h3>
+                <p>This fictional update shows where Northstar teams would share company news and important resources.</p>
+              </article>
+              <article class="portal-announcement-card">
+                <span class="portal-card-icon announcement-icon-teal" aria-hidden="true">↗</span>
+                <p class="portal-card-kicker">WORKPLACE · SAMPLE</p>
+                <h3>Explore the team resource library</h3>
+                <p>Find quick links to common workplace topics and ask the assistant where to look next.</p>
+              </article>
+              <article class="portal-announcement-card">
+                <span class="portal-card-icon announcement-icon-coral" aria-hidden="true">♡</span>
+                <p class="portal-card-kicker">WELLBEING · SAMPLE</p>
+                <h3>Make space for a thoughtful check-in</h3>
+                <p>A sample reminder to share supportive, employee-first updates in a real company portal.</p>
+              </article>
+            </div>
+          </section>
+
+          <section id="resources" class="portal-section portal-resources-section">
+            <div class="portal-section-heading"><div><p class="eyebrow">A GOOD PLACE TO START</p><h2>Quick links</h2></div></div>
+            <div class="portal-resource-grid">
+              <button class="portal-resource-card" type="button" onclick="openAssistant('hr')">
+                <span class="portal-resource-icon resource-hr" aria-hidden="true">HR</span><span><strong>People & HR</strong><small>Ask about leave, benefits, and onboarding</small></span><span class="portal-resource-arrow" aria-hidden="true">↗</span>
+              </button>
+              <button class="portal-resource-card" type="button" onclick="openAssistant('it')">
+                <span class="portal-resource-icon resource-it" aria-hidden="true">IT</span><span><strong>IT help desk</strong><small>Get guidance on access, VPN, and devices</small></span><span class="portal-resource-arrow" aria-hidden="true">↗</span>
+              </button>
+              <button class="portal-resource-card" type="button" onclick="openAssistant('policy')">
+                <span class="portal-resource-icon resource-policy" aria-hidden="true">PL</span><span><strong>Policies & compliance</strong><small>Find information in company policy documents</small></span><span class="portal-resource-arrow" aria-hidden="true">↗</span>
+              </button>
+              <a class="portal-resource-card" href="#support">
+                <span class="portal-resource-icon resource-support" aria-hidden="true">?</span><span><strong>Get workplace support</strong><small>Choose a specialist assistant for help</small></span><span class="portal-resource-arrow" aria-hidden="true">↗</span>
+              </a>
+            </div>
+          </section>
+
+          <section id="support" class="portal-support-strip">
+            <div><p class="eyebrow">HERE WHEN YOU NEED IT</p><h2>Not sure where to start?</h2><p>Ask a question in plain language. The assistant searches company documents and cites sources when available.</p></div>
+            <button type="button" class="portal-support-button" onclick="openAssistant('hr')">Open AI help <span aria-hidden="true">↗</span></button>
+          </section>
+          <footer class="portal-footer"><span>Northstar · Fictional demonstration company</span><span>For official guidance, refer to approved company documents.</span></footer>
+        </main>
+        <button type="button" class="assistant-fab" id="assistantFab" aria-label="Open AI help assistant" aria-controls="assistantPanel" aria-expanded="false" onclick="openAssistant()">
+          <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M12 3.5 14.1 9.9 20.5 12l-6.4 2.1L12 20.5l-2.1-6.4L3.5 12l6.4-2.1L12 3.5Z" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/><path d="m19 3 .6 1.8 1.9.7-1.9.7L19 8l-.6-1.8-1.9-.7 1.9-.7L19 3Z" fill="currentColor"/></svg>
+          <span>Ask Cathy</span>
+        </button>
+        <section class="assistant-panel" id="assistantPanel" aria-label="Cathy workplace assistant" hidden>
+          <header class="assistant-panel-header">
+            <div class="assistant-panel-brand"><span class="portal-brand-mark">C</span><span><strong>Cathy</strong><small>WORKPLACE ASSISTANT · HR · IT · POLICY</small></span></div>
+            <div class="assistant-panel-controls">
+              <button type="button" id="assistantMinimize" aria-label="Minimize assistant" title="Minimize" onclick="minimizeAssistant()">−</button>
+              <button type="button" aria-label="Close assistant" title="Close" onclick="closeAssistant()">×</button>
+            </div>
+          </header>
+          <div class="assistant-panel-content" id="assistantPanelContent">
+            <iframe id="assistantFrame" title="Cathy, Northstar workplace assistant for HR, IT, and Policy" src="chat.html?embedded=1&amp;agent=hr"></iframe>
+          </div>
+        </section>
+      `;
+    }
+
+    async function initializePortal() {
+      const user = await requireAuth();
+      if (!user) return;
+      document.getElementById('portalApp').outerHTML = portalMarkup(user);
+      const frame = document.getElementById('assistantFrame');
+      frame?.addEventListener('load', syncAssistantAgent);
+      syncAssistantAgent();
+      document.addEventListener('keydown', event => {
+        if (event.key === 'Escape') closeAssistant();
+      });
+    }
+
+    function syncAssistantAgent() {
+      const frame = document.getElementById('assistantFrame');
+      if (!frame?.contentWindow) return;
+      frame.contentWindow.postMessage(
+        { type: 'eka:select-agent', agent: selectedAssistantAgent },
+        location.origin,
+      );
+    }
+
+    function openAssistant(agent) {
+      const panel = document.getElementById('assistantPanel');
+      if (!panel) return;
+      if (['hr', 'it', 'policy'].includes(agent)) {
+        selectedAssistantAgent = agent;
+        syncAssistantAgent();
+      }
+      panel.hidden = false;
+      panel.classList.remove('minimized');
+      document.getElementById('assistantFab').setAttribute('aria-expanded', 'true');
+    }
+
+    function minimizeAssistant() {
+      document.getElementById('assistantPanel')?.classList.toggle('minimized');
+    }
+
+    function closeAssistant() {
+      const panel = document.getElementById('assistantPanel');
+      if (!panel) return;
+      panel.hidden = true;
+      panel.classList.remove('minimized');
+      document.getElementById('assistantFab').setAttribute('aria-expanded', 'false');
+      document.getElementById('assistantFab').focus();
+    }
+
+    initializePortal();
+  </script>
+</body>
+</html>

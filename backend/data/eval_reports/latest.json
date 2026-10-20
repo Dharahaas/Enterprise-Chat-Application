@@ -1,0 +1,362 @@
+{
+  "started_at": "2026-10-20T10:08:34.059155+00:00",
+  "finished_at": "2026-10-20T10:09:03.448982+00:00",
+  "duration_sec": 29.39,
+  "total_questions": 24,
+  "avg_faithfulness": 0.461,
+  "avg_answer_relevancy": 0.646,
+  "avg_context_precision": 0.875,
+  "avg_context_recall": 0.896,
+  "avg_overall": 0.686,
+  "p50_latency_ms": 1272,
+  "p95_latency_ms": 1800,
+  "results": [
+    {
+      "question": "How many casual leaves am I entitled to?",
+      "agent": "hr",
+      "answer": "You are entitled to 12 casual leaves per calendar year. Casual leaves have a maximum limit of 3 consecutive days at a time and require manager approval.",
+      "sources": [
+        "HR_Policy_Manual_2024.pdf",
+        "HR_Policy_Manual_2024.pdf",
+        "Leave_Policy.docx"
+      ],
+      "latency_ms": 2245,
+      "faithfulness": 0.8333333333333334,
+      "answer_relevancy": 1.0,
+      "context_precision": 1.0,
+      "context_recall": 1.0,
+      "overall": 0.95
+    },
+    {
+      "question": "How many sick leaves do I get?",
+      "agent": "hr",
+      "answer": "You are entitled to 12 Sick Leaves (SL) per calendar year.",
+      "sources": [
+        "HR_Policy_Manual_2024.pdf",
+        "HR_Policy_Manual_2024.pdf"
+      ],
+      "latency_ms": 951,
+      "faithfulness": 1.0,
+      "answer_relevancy": 1.0,
+      "context_precision": 1.0,
+      "context_recall": 0.5,
+      "overall": 0.9
+    },
+    {
+      "question": "How many earned leaves are there?",
+      "agent": "hr",
+      "answer": "Employees are entitled to 15 Earned Leaves (EL) per calendar year. Up to 45 days of earned leave can be carried forward to the next year.",
+      "sources": [
+        "HR_Policy_Manual_2024.pdf",
+        "Leave_Policy.docx"
+      ],
+      "latency_ms": 1272,
+      "faithfulness": 0.42857142857142855,
+      "answer_relevancy": 1.0,
+      "context_precision": 0.5,
+      "context_recall": 1.0,
+      "overall": 0.7285714285714286
+    },
+    {
+      "question": "When is the payroll cut-off?",
+      "agent": "hr",
+      "answer": "The payroll cut-off is on the 20th of every month, and salary credits are processed on the last working day of the month.",
+      "sources": [
+        "HR_Policy_Manual_2024.pdf",
+        "Payroll_Procedure.docx"
+      ],
+      "latency_ms": 1278,
+      "faithfulness": 1.0,
+      "answer_relevancy": 1.0,
+      "context_precision": 1.0,
+      "context_recall": 1.0,
+      "overall": 1.0
+    },
+    {
+      "question": "What is the maximum carry-forward for earned leave?",
+      "agent": "hr",
+      "answer": "Up to 45 days of earned leave can be carried forward to the next year.",
+      "sources": [
+        "HR_Policy_Manual_2024.pdf",
+        "Leave_Policy.docx",
+        "Leave_Policy.docx"
+      ],
+      "latency_ms": 878,
+      "faithfulness": 0.8,
+      "answer_relevancy": 0.5,
+      "context_precision": 1.0,
+      "context_recall": 1.0,
+      "overall": 0.79
+    },
+    {
+      "question": "What documents are needed for onboarding a new hire?",
+      "agent": "hr",
+      "answer": "To complete the onboarding process, new hires need to submit the following documents:\n1. Signed offer letter (counter-sign and return)\n2. PAN card copy\n3. Aadhaar card copy\n4. Educational certificates (10th, 12th, degree)\n5. Previous employment relieving letter\n6. Bank account details (cancelled cheque or passbook copy)\n7. Two passport-size photographs\n8. Form 12B (if joining with previous PF balance)",
+      "sources": [
+        "Onboarding_Checklist.pdf",
+        "Onboarding_Checklist.pdf"
+      ],
+      "latency_ms": 1800,
+      "faithfulness": 0.5,
+      "answer_relevancy": 1.0,
+      "context_precision": 1.0,
+      "context_recall": 1.0,
+      "overall": 0.8499999999999999
+    },
+    {
+      "question": "What is the PF contribution rate?",
+      "agent": "hr",
+      "answer": "The Provident Fund (PF) contribution rate is 12% of the basic salary for the employee and 12% for the employer.",
+      "sources": [
+        "Payroll_Procedure.docx"
+      ],
+      "latency_ms": 1562,
+      "faithfulness": 0.25,
+      "answer_relevancy": 1.0,
+      "context_precision": 1.0,
+      "context_recall": 1.0,
+      "overall": 0.7749999999999999
+    },
+    {
+      "question": "When are payslips available?",
+      "agent": "hr",
+      "answer": "Payslips are available on the HR Portal by the 1st of the next month.",
+      "sources": [
+        "HR_Policy_Manual_2024.pdf",
+        "Payroll_Procedure.docx"
+      ],
+      "latency_ms": 1733,
+      "faithfulness": 1.0,
+      "answer_relevancy": 1.0,
+      "context_precision": 0.5,
+      "context_recall": 1.0,
+      "overall": 0.8999999999999999
+    },
+    {
+      "question": "How do I reset my corporate password?",
+      "agent": "it",
+      "answer": "Here is how to reset your corporate password:\n\n**Step-by-step instructions:**\n1. Go to [https://password.company.internal](https://password.company.internal)\n2. Click 'Forgot Password'.\n3. Enter your employee ID or email.\n4. Choose a reset method: SMS OTP or Email OTP.\n5. Enter the 6-digit OTP received.\n6. Set a new password that meets the following policy requirements:\n   - Minimum 12 characters\n   - At least 1 uppercase letter\n   - At least 1 number\n   - At least 1 special character\n   - Cannot reuse your last 5 passwords\n\n**Additional Information:**\n* The new password will sync to Active Directory within 5 minutes.\n* If you do not receive the OTP within 2 minutes, contact the IT desk at ext. 4500.\n\n**Security Best Practice:**\nNever share your password with anyone, including IT support staff, and avoid writing it down where others can see it.",
+      "sources": [
+        "IT_SOP_PasswordReset.pdf",
+        "IT_SOP_PasswordReset.pdf"
+      ],
+      "latency_ms": 1185,
+      "faithfulness": 0.625,
+      "answer_relevancy": 1.0,
+      "context_precision": 1.0,
+      "context_recall": 1.0,
+      "overall": 0.8875
+    },
+    {
+      "question": "What is the minimum password length?",
+      "agent": "it",
+      "answer": "The minimum password length is **12 characters**. \n\n*(Note: In general IT terms, a password policy is a set of rules designed to enhance computer security by encouraging users to employ strong passwords and use them properly.)*\n\nFor company-specific password requirements, your new password must also include:\n- At least 1 uppercase letter\n- At least 1 number\n- At least 1 special character\n- Cannot reuse your last 5 passwords",
+      "sources": [
+        "IT_SOP_PasswordReset.pdf",
+        "IT_SOP_PasswordReset.pdf"
+      ],
+      "latency_ms": 1160,
+      "faithfulness": 0.5,
+      "answer_relevancy": 1.0,
+      "context_precision": 1.0,
+      "context_recall": 1.0,
+      "overall": 0.8499999999999999
+    },
+    {
+      "question": "How do I configure VPN on macOS?",
+      "agent": "it",
+      "answer": "**General Explanation:**\nA VPN (Virtual Private Network) is a technology that creates a secure, encrypted connection over the internet between your device and your company's network, allowing you to safely access internal resources as if you were physically in the office. *(Note: This is a general explanation of the technology.)*\n\n***\n\n**How to configure VPN on macOS:**\n\n1. Install the **Cisco AnyConnect Secure Mobility Client** from the IT Self-Service Portal.\n2. Open AnyConnect.\n3. Enter `vpn.company.com` as the host.\n4. Sign in with your corporate credentials (`employee_id@company.com`).\n5. Enter the 2FA token from Microsoft Authenticator.\n6. Once connected, you will receive a `10.x.x.x` internal IP address.\n\n**Security Best Practice:** Always ensure your 2FA tokens remain confidential and never share your corporate credentials or verification codes with anyone. \n\n*If you experience connection drops, check that your firewall allows UDP 443 and 500. If MFA fails, re-register Microsoft Authenticator via the IT Portal. For additional support, contact the IT desk at ext. 4500 or it@company.com.*",
+      "sources": [
+        "IT_Network_Guide_v2.pdf",
+        "IT_Network_Guide_v2.pdf"
+      ],
+      "latency_ms": 1728,
+      "faithfulness": 0.75,
+      "answer_relevancy": 1.0,
+      "context_precision": 1.0,
+      "context_recall": 1.0,
+      "overall": 0.9249999999999998
+    },
+    {
+      "question": "What is the VPN host address?",
+      "agent": "it",
+      "answer": "I couldn't find enough relevant information in the available IT documents to answer that. Could you clarify or rephrase your question?",
+      "sources": [],
+      "latency_ms": 101,
+      "faithfulness": 0.0,
+      "answer_relevancy": 0.0,
+      "context_precision": 0.0,
+      "context_recall": 0.0,
+      "overall": 0.0
+    },
+    {
+      "question": "How do I request a hardware upgrade?",
+      "agent": "it",
+      "answer": "To request a hardware upgrade, follow these steps:\n\n1. Go to the IT Service Portal.\n2. Navigate to **Request** > **Hardware** > **Upgrade**.\n\n**Additional Information:**\n* **Approval chain:** Manager > IT Asset Manager > Procurement (if the cost is greater than Rs 50,000).\n* **Standard turnaround time:** 5 business days from approval.\n* **Eligibility:** Laptops must be older than 3 years OR have a documented performance SLA breach.",
+      "sources": [
+        "Asset_Policy.docx"
+      ],
+      "latency_ms": 1057,
+      "faithfulness": 0.625,
+      "answer_relevancy": 1.0,
+      "context_precision": 1.0,
+      "context_recall": 1.0,
+      "overall": 0.8875
+    },
+    {
+      "question": "What is the eligibility for hardware upgrade?",
+      "agent": "it",
+      "answer": "**Eligibility for Hardware Upgrade:**\nAccording to company policy, you are eligible for a hardware upgrade if your laptop is older than 3 years OR if there is a documented performance SLA breach. \n\n**How to request an upgrade:**\n1. Go to the IT Service Portal.\n2. Navigate to: `Request -> Hardware -> Upgrade` to raise your request.\n\n*Note on approval and turnaround:* The request requires approval from your manager and the IT Asset Manager (plus Procurement if the cost exceeds Rs 50,000). The standard turnaround time is 5 business days from approval.",
+      "sources": [
+        "Asset_Policy.docx"
+      ],
+      "latency_ms": 1128,
+      "faithfulness": 1.0,
+      "answer_relevancy": 1.0,
+      "context_precision": 1.0,
+      "context_recall": 1.0,
+      "overall": 1.0
+    },
+    {
+      "question": "What is the IT desk extension?",
+      "agent": "it",
+      "answer": "I couldn't find enough relevant information in the available IT documents to answer that. Could you clarify or rephrase your question?",
+      "sources": [],
+      "latency_ms": 45,
+      "faithfulness": 0.0,
+      "answer_relevancy": 0.0,
+      "context_precision": 0.0,
+      "context_recall": 0.0,
+      "overall": 0.0
+    },
+    {
+      "question": "What is the standard turnaround for hardware upgrades?",
+      "agent": "it",
+      "answer": "The standard turnaround for hardware upgrades is **5 business days** from the time the request is approved. \n\n**Additional details for requesting a hardware upgrade:**\n* **How to request:** Raise a request via the IT Service Portal under *Request -> Hardware -> Upgrade*.\n* **Approval chain:** Manager -> IT Asset Manager -> Procurement (if the cost is greater than Rs 50,000).\n* **Eligibility:** Laptops must be more than 3 years old, or there must be a documented performance SLA breach.",
+      "sources": [
+        "Asset_Policy.docx"
+      ],
+      "latency_ms": 918,
+      "faithfulness": 0.75,
+      "answer_relevancy": 1.0,
+      "context_precision": 1.0,
+      "context_recall": 1.0,
+      "overall": 0.9249999999999998
+    },
+    {
+      "question": "What are the data classification levels?",
+      "agent": "policy",
+      "answer": "The data classification policy defines four levels: Level 1 (Public), Level 2 (Internal), Level 3 (Confidential), and Level 4 (Restricted). Public data has no handling restrictions and can be shared externally without approval. Internal data is for employees and contractors only and requires manager approval for external sharing. Confidential data requires a need-to-know basis, encryption at rest and in transit, and Data Protection Officer (DPO) approval for external sharing. Restricted data involves trade secrets, credentials, private keys, and board minutes, with strictly logged access and a total ban on external sharing, where violations are grounds for termination.",
+      "sources": [
+        "InfoSec_Policy_v4.pdf",
+        "InfoSec_Policy_v4.pdf"
+      ],
+      "latency_ms": 1341,
+      "faithfulness": 0.3333333333333333,
+      "answer_relevancy": 1.0,
+      "context_precision": 1.0,
+      "context_recall": 1.0,
+      "overall": 0.8
+    },
+    {
+      "question": "What is the gift acceptance policy?",
+      "agent": "policy",
+      "answer": "Gemini's free-tier request limit was reached. Please wait and try again, or check your active limits in Google AI Studio.",
+      "sources": [
+        "Code_of_Conduct_2024.pdf"
+      ],
+      "latency_ms": 1319,
+      "faithfulness": 0.0,
+      "answer_relevancy": 0.0,
+      "context_precision": 1.0,
+      "context_recall": 1.0,
+      "overall": 0.4
+    },
+    {
+      "question": "Is hybrid work allowed?",
+      "agent": "policy",
+      "answer": "Gemini's free-tier request limit was reached. Please wait and try again, or check your active limits in Google AI Studio.",
+      "sources": [
+        "Hybrid_Work_Policy_2024.pdf"
+      ],
+      "latency_ms": 1363,
+      "faithfulness": 0.0,
+      "answer_relevancy": 0.0,
+      "context_precision": 1.0,
+      "context_recall": 1.0,
+      "overall": 0.4
+    },
+    {
+      "question": "What are the core hours for remote work?",
+      "agent": "policy",
+      "answer": "Core hours for remote work are 10 AM - 4 PM IST. Employees must also attend all scheduled meetings from a quiet, professional environment and adhere to the InfoSec Policy v4 at all times.",
+      "sources": [
+        "Hybrid_Work_Policy_2024.pdf",
+        "Hybrid_Work_Policy_2024.pdf"
+      ],
+      "latency_ms": 993,
+      "faithfulness": 0.6666666666666666,
+      "answer_relevancy": 1.0,
+      "context_precision": 1.0,
+      "context_recall": 1.0,
+      "overall": 0.8999999999999999
+    },
+    {
+      "question": "How do I report a phishing email?",
+      "agent": "policy",
+      "answer": "Gemini's free-tier request limit was reached. Please wait and try again, or check your active limits in Google AI Studio.",
+      "sources": [
+        "Security_Incident_Response.pdf"
+      ],
+      "latency_ms": 1371,
+      "faithfulness": 0.0,
+      "answer_relevancy": 0.0,
+      "context_precision": 1.0,
+      "context_recall": 1.0,
+      "overall": 0.4
+    },
+    {
+      "question": "What is the SOC acknowledgement SLA?",
+      "agent": "policy",
+      "answer": "Gemini's free-tier request limit was reached. Please wait and try again, or check your active limits in Google AI Studio.",
+      "sources": [
+        "Security_Incident_Response.pdf"
+      ],
+      "latency_ms": 1534,
+      "faithfulness": 0.0,
+      "answer_relevancy": 0.0,
+      "context_precision": 1.0,
+      "context_recall": 1.0,
+      "overall": 0.4
+    },
+    {
+      "question": "What is the consequence of leaking Restricted data?",
+      "agent": "policy",
+      "answer": "Gemini's free-tier request limit was reached. Please wait and try again, or check your active limits in Google AI Studio.",
+      "sources": [
+        "InfoSec_Policy_v4.pdf",
+        "InfoSec_Policy_v4.pdf"
+      ],
+      "latency_ms": 1197,
+      "faithfulness": 0.0,
+      "answer_relevancy": 0.0,
+      "context_precision": 1.0,
+      "context_recall": 1.0,
+      "overall": 0.4
+    },
+    {
+      "question": "What is the internet reimbursement for remote work?",
+      "agent": "policy",
+      "answer": "Gemini's free-tier request limit was reached. Please wait and try again, or check your active limits in Google AI Studio.",
+      "sources": [
+        "Hybrid_Work_Policy_2024.pdf"
+      ],
+      "latency_ms": 1215,
+      "faithfulness": 0.0,
+      "answer_relevancy": 0.0,
+      "context_precision": 1.0,
+      "context_recall": 1.0,
+      "overall": 0.4
+    }
+  ]
+}

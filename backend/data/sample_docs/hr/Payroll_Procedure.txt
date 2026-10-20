@@ -1,0 +1,18 @@
+PAYROLL PROCEDURE
+
+4.1 Payroll Cycle
+- Cut-off: 20th of every month
+- Credit date: Last working day of the month
+- Payslips: Available on the HR Portal by the 1st of next month
+
+4.2 Reimbursement Claim Submission
+- Submit through HR Portal -> Reimbursements -> New Claim
+- Attach original bills (PDF or image, max 5MB per file)
+- Manager approval required for claims above Rs 5,000
+- Claims submitted before cut-off are processed in the same month
+- Claims after cut-off are processed in the next month
+
+4.3 Statutory Deductions
+- PF: 12% of basic (employee) + 12% (employer)
+- Professional Tax: As per state slab
+- TDS: Computed based on declared investment proofs

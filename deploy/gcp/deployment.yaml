@@ -1,0 +1,118 @@
+# Enterprise Knowledge Assistant — GCP Deployment (Phase 3)
+#
+# This stack deploys:
+#   - Cloud Run service for the backend (FastAPI + LangChain + Chroma)
+#   - Cloud Storage bucket for the frontend static files
+#   - Cloud Load Balancer with HTTPS + CDN
+#
+# Usage:
+#   gcloud deployment-manager deployments create eka-prod \
+#     --config deploy/gcp/deployment.yaml
+#
+# Prerequisites:
+#   - gcloud CLI configured: gcloud auth login
+#   - APIs enabled: run.googleapis.com, compute.googleapis.com, storage.googleapis.com
+
+imports:
+  - path: ../../backend/Dockerfile
+
+resources:
+  # ---------- Cloud Run Service ----------
+  - name: eka-backend
+    type: gcp-types/run-v1:projects.locations.services
+    properties:
+      parent: projects/$(PROJECT_NUMBER)/locations/$(REGION)
+      apiVersion: run.googleapis.com/v1
+      kind: Service
+      metadata:
+        name: eka-backend
+        namespace: $(PROJECT_NUMBER)
+      spec:
+        template:
+          metadata:
+            annotations:
+              autoscaling.knative.dev/maxScale: "10"
+              autoscaling.knative.dev/minScale: "1"
+              run.googleapis.com/cpu-throttling: "false"
+          spec:
+            containerConcurrency: 80
+            timeoutSeconds: 300
+            containers:
+              - name: eka-backend
+                image: gcr.io/$(PROJECT_NUMBER)/eka-backend:latest
+                ports:
+                  - containerPort: 8000
+                resources:
+                  limits:
+                    cpu: "1000m"
+                    memory: "2Gi"
+                env:
+                  - name: ENVIRONMENT
+                    value: prod
+                  - name: OPENAI_API_KEY
+                    valueFrom:
+                      secretKeyRef:
+                        name: openai-api-key
+                        key: latest
+                  - name: LANGSMITH_API_KEY
+                    valueFrom:
+                      secretKeyRef:
+                        name: langsmith-api-key
+                        key: latest
+                  - name: CORS_ORIGINS
+                    value: "*"
+                startupProbe:
+                  httpGet:
+                    path: /api/health
+                    port: 8000
+                  periodSeconds: 10
+                  timeoutSeconds: 5
+                livenessProbe:
+                  httpGet:
+                    path: /api/health
+                    port: 8000
+                  periodSeconds: 30
+                  timeoutSeconds: 10
+
+  # ---------- Frontend Bucket ----------
+  - name: eka-frontend-bucket
+    type: storage.v1.bucket
+    properties:
+      name: $(PROJECT_ID)-eka-frontend
+      location: $(REGION)
+      storageClass: STANDARD
+      website:
+        mainPageSuffix: index.html
+        notFoundPage: index.html
+      iamConfiguration:
+        uniformBucketLevelAccess:
+          enabled: true
+
+  # ---------- Public access for frontend bucket ----------
+  - name: eka-frontend-bucket-iam
+    type: gcp-types/storage-v1:policyMember
+    properties:
+      bucket: $(PROJECT_ID)-eka-frontend
+      role: roles/storage.objectViewer
+      member: allUsers
+
+  # ---------- Load Balancer ----------
+  - name: eka-load-balancer
+    type: compute.v1.globalForwardingRule
+    properties:
+      name: eka-lb
+      target: $(ref.eka-backend-url.selfLink)
+      portRange: 443
+      IPProtocol: TCP
+
+# Substitutions (set via gcloud deployment-manager)
+substitutions:
+  PROJECT_ID: your-project-id
+  PROJECT_NUMBER: "123456789012"
+  REGION: us-central1
+
+outputs:
+  - name: backend-url
+    value: https://$(ref.eka-backend.status.url)
+  - name: frontend-url
+    value: https://storage.googleapis.com/$(PROJECT_ID)-eka-frontend/index.html

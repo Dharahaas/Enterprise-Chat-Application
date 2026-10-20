@@ -1,0 +1,50 @@
+# Dependencies
+node_modules/
+__pycache__/
+*.pyc
+.venv/
+venv/
+env/
+
+# Build artifacts
+dist/
+build/
+.next/
+*.log
+
+# Environment
+.env
+.env.local
+.env.production
+*.env
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Editor
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Cache
+.cache/
+*.egg-info/
+
+# Phase 2 backend artifacts
+backend/data/chroma_db/
+backend/data/huggingface/
+backend/data/uploads/
+backend/data/auth/
+backend/.env
+backend/.venv/
+secrets/
+
+# Environment secrets
+.env
+.env.*
+!.env.example
+**/.env
+**/.env.*
+!**/.env.example

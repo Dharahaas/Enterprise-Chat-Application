@@ -1,0 +1,93 @@
+# ============================================================
+# Enterprise Knowledge Assistant — Full-stack docker-compose
+# Brings up: FastAPI + Nginx + HTTPS reverse proxy on one host
+# ============================================================
+
+services:
+  # ---------- Backend (FastAPI + LangChain + Chroma) ----------
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: eka-backend
+    restart: unless-stopped
+    environment:
+      ENVIRONMENT: prod
+      DEMO_AUTH_ENABLED: "false"
+      HOST: 0.0.0.0
+      PORT: 8000
+      CORS_ORIGINS: ${CORS_ORIGINS:-}
+      AUTH_DATABASE_PATH: /app/data/auth/auth.sqlite3
+      VECTOR_DB_PATH: /app/data/chroma_db
+      ADMIN_USERNAME: ${ADMIN_USERNAME:?Set ADMIN_USERNAME in the root .env file}
+      ADMIN_PASSWORD_FILE: /run/secrets/admin_password
+      LLM_PROVIDER: gemini
+      GEMINI_API_KEY_FILE: /run/secrets/gemini_api_key
+      GEMINI_MODEL: ${GEMINI_MODEL:-gemini-3.5-flash-lite}
+    secrets:
+      - admin_password
+      - gemini_api_key
+    volumes:
+      # Persist Chroma DB across restarts
+      - backend-data:/app/data/chroma_db
+      - backend-uploads:/app/data/uploads
+      - backend-auth:/app/data/auth
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    networks:
+      - eka-net
+
+  # ---------- Frontend (internal Nginx static server + API proxy) ----------
+  frontend:
+    image: nginx:alpine
+    container_name: eka-frontend
+    restart: unless-stopped
+    volumes:
+      - ./:/usr/share/nginx/html:ro
+      - ./deploy/nginx.conf:/etc/nginx/conf.d/default.conf:ro
+    depends_on:
+      backend:
+        condition: service_healthy
+    networks:
+      - eka-net
+
+  # ---------- Public HTTPS entry point (automatic certificates) ----------
+  caddy:
+    image: caddy:2-alpine
+    container_name: eka-caddy
+    restart: unless-stopped
+    environment:
+      APP_DOMAIN: ${APP_DOMAIN:?Set APP_DOMAIN to a public DNS name}
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    depends_on:
+      - frontend
+    networks:
+      - eka-net
+
+volumes:
+  backend-data:
+  backend-uploads:
+  backend-auth:
+  caddy-data:
+  caddy-config:
+
+secrets:
+  admin_password:
+    file: ${ADMIN_PASSWORD_FILE:-./secrets/admin_password}
+  gemini_api_key:
+    file: ${GEMINI_API_KEY_FILE:-./secrets/gemini_api_key}
+
+networks:
+  eka-net:
+    driver: bridge

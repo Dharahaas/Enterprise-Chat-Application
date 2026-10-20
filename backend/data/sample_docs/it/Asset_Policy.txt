@@ -1,0 +1,16 @@
+ASSET POLICY
+
+7.3 Hardware Upgrade Requests
+- Raise request via IT Service Portal: Request -> Hardware -> Upgrade
+- Approval chain: Manager -> IT Asset Manager -> Procurement (if cost > Rs 50,000)
+- Standard turnaround: 5 business days from approval
+- Eligibility: laptop age > 3 years OR documented performance SLA breach
+
+7.4 Damage and Loss
+- Accidental damage: employee responsibility up to Rs 10,000 deductible
+- Theft: FIR copy required for waiver
+- Negligence: full recovery at current book value
+
+7.5 Return on Exit
+- All company assets must be returned on or before last working day
+- IT clearance certificate required for full and final settlement

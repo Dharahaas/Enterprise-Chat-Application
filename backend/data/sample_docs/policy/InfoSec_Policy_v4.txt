@@ -1,0 +1,25 @@
+INFORMATION SECURITY POLICY v4.0
+
+Section 2: Data Classification
+
+Level 1 - Public
+- Marketing materials, website content, published whitepapers
+- No handling restrictions
+- Can be shared externally without approval
+
+Level 2 - Internal
+- Process documents, org charts, internal announcements
+- For employees and contractors only
+- Must not be shared externally without manager approval
+
+Level 3 - Confidential
+- Employee data, financials, customer PII, source code
+- Need-to-know basis only
+- Encrypted at rest and in transit
+- External sharing requires DPO approval
+
+Level 4 - Restricted
+- Trade secrets, credentials, private keys, board minutes
+- Strictly need-to-know, logged access
+- Never shared externally
+- Violation is grounds for termination

@@ -1,0 +1,21 @@
+HYBRID WORK POLICY 2024
+
+Eligibility:
+- Roles graded L4 and below are eligible for up to 2 days/week remote work
+- Subject to manager approval and team coverage requirements
+- Roles requiring physical access (lab, data center, facilities) are excluded
+
+Approved work locations:
+- Remote work must be from the registered work location
+- International remote work requires additional Legal and Tax approval (min 2 weeks)
+- Working from public networks (cafes, airports) is discouraged for Confidential data
+
+Equipment:
+- Company laptop with VPN configured is mandatory
+- Personal devices may be used only with MDM enrollment
+- Monitor and peripherals provided on request (one-time)
+
+Compliance:
+- Maintain core hours: 10 AM - 4 PM IST
+- Attend all scheduled meetings from a quiet, professional environment
+- Adhere to InfoSec Policy v4 at all times

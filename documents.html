@@ -1,0 +1,281 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="theme-color" content="#7357E8" />
+  <title>Documents · Enterprise Knowledge Assistant</title>
+  <link rel="icon" type="image/svg+xml" href="favicon.svg" />
+  <link rel="stylesheet" href="css/style.css" />
+  <link rel="stylesheet" href="css/pages.css" />
+</head>
+<body>
+  <script src="js/app.js"></script>
+  <script>
+    let documents = [];
+    let filterAgent = 'all';
+    let searchTerm = '';
+    let isLoading = true;
+    let pageError = '';
+    let uploadInProgress = false;
+    const DOCUMENT_DISPLAY_NAMES_KEY = 'eka-document-display-names-v1';
+    let documentDisplayNames = loadDocumentDisplayNames();
+
+    function loadDocumentDisplayNames() {
+      try {
+        const saved = JSON.parse(localStorage.getItem(DOCUMENT_DISPLAY_NAMES_KEY) || '{}');
+        return saved && typeof saved === 'object' && !Array.isArray(saved) ? saved : {};
+      } catch (error) {
+        console.error('[EKA] Could not load document display names:', error);
+        return {};
+      }
+    }
+
+    function documentKey(agent, storedName) {
+      return `${agent}:${storedName}`;
+    }
+
+    function displayDocumentName(document) {
+      return documentDisplayNames[documentKey(document.agent, document.name)] || document.name;
+    }
+
+    function escapeHtml(value) {
+      return String(value ?? '')
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
+    }
+
+    function formatSize(bytes) {
+      const size = Number(bytes);
+      if (!Number.isFinite(size) || size < 0) return '—';
+      if (size < 1024) return `${size} B`;
+      if (size < 1024 * 1024) return `${(size / 1024).toFixed(0)} KB`;
+      return `${(size / (1024 * 1024)).toFixed(1)} MB`;
+    }
+
+    function formatDate(value) {
+      const date = new Date(value);
+      return Number.isNaN(date.getTime())
+        ? '—'
+        : date.toLocaleDateString([], { month: 'short', day: 'numeric', year: 'numeric' });
+    }
+
+    function visibleDocuments() {
+      const normalizedSearch = searchTerm.trim().toLowerCase();
+      return documents.filter(document => {
+        return (filterAgent === 'all' || document.agent === filterAgent) &&
+          (!normalizedSearch || document.name.toLowerCase().includes(normalizedSearch));
+      }).sort((left, right) => left.name.localeCompare(right.name));
+    }
+
+    function renderDocumentRows() {
+      const rows = visibleDocuments();
+      if (isLoading) return '<tr><td colspan="5"><div class="table-state"><span class="spinner"></span> Loading documents…</div></td></tr>';
+      if (pageError) return `<tr><td colspan="5"><div class="table-state error-state">${escapeHtml(pageError)} <button class="text-button" type="button" onclick="loadDocuments()">Try again</button></div></td></tr>`;
+      if (!rows.length) return `<tr><td colspan="5"><div class="table-state">${documents.length ? 'No documents match your search.' : 'No indexed documents yet. Upload a file to add it to a knowledge base.'}</div></td></tr>`;
+      return rows.map(document => {
+        const agent = AGENTS.find(item => item.id === document.agent);
+        const visibleName = displayDocumentName(document);
+        const extension = visibleName.split('.').pop().toUpperCase();
+        return `
+          <tr>
+            <td><div class="document-name-cell">
+              <span class="document-file-mark ${escapeHtml(extension.toLowerCase())}">${escapeHtml(extension.slice(0, 4))}</span>
+              <span class="document-name-wrap"><strong>${escapeHtml(visibleName)}</strong><small>${escapeHtml(agent?.name || document.agent)}</small></span>
+            </div></td>
+            <td><span class="agent-label ${escapeHtml(document.agent)}"><span class="agent-dot ${escapeHtml(document.agent)}"></span>${escapeHtml(agent?.name || document.agent)}</span></td>
+            <td class="numeric-cell">${formatSize(document.size_bytes)}</td>
+            <td class="numeric-cell">${Number(document.chunks).toLocaleString()}</td>
+            <td><div class="document-row-actions"><span class="index-status"><span></span>${escapeHtml(document.status)}</span>
+              <button class="icon-button danger-hover" type="button" aria-label="Delete ${escapeHtml(document.name)}" title="Delete document" data-remove-agent="${escapeHtml(document.agent)}" data-remove-name="${escapeHtml(document.name)}">
+                <svg viewBox="0 0 20 20" fill="none" aria-hidden="true"><path d="M3.5 5.5h13m-11.5 0 .8 11h8.4l.8-11m-7.5 0V3.75h4V5.5m-3.5 3v5m3-5v5" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>
+              </button>
+            </div></td>
+          </tr>
+        `;
+      }).join('');
+    }
+
+    async function renderDocumentsPage() {
+      const mainContent = `
+        <section class="page document-page">
+          <div class="page-intro">
+            <div><p class="eyebrow">KNOWLEDGE BASE</p><h1>Documents</h1><p>Manage the source files available to your specialist agents.</p></div>
+          </div>
+          <input id="fileInput" type="file" class="sr-only" accept=".pdf,.docx,.txt,.text,.md,.markdown" onchange="handleUpload(event)" />
+          <div class="document-summary">
+            <div><span class="summary-label">Indexed files</span><strong id="totalDocuments">—</strong></div>
+            ${AGENTS.map(agent => `<div><span class="summary-label">${escapeHtml(agent.name)}</span><strong id="count-${agent.id}">—</strong></div>`).join('')}
+          </div>
+          <section class="upload-panel" aria-labelledby="uploadTitle">
+            <div class="upload-copy"><span class="upload-icon"><svg viewBox="0 0 20 20" fill="none" aria-hidden="true"><path d="M10 13V3m0 0L6.5 6.5M10 3l3.5 3.5M4 12.5v3A1.5 1.5 0 0 0 5.5 17h9a1.5 1.5 0 0 0 1.5-1.5v-3" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg></span>
+              <div><h2 id="uploadTitle">Add to your knowledge base</h2><p>Upload a PDF, DOCX, TXT, or Markdown file. It will be indexed for its assigned agent.</p></div>
+            </div>
+            <p class="upload-explainer">After indexing, the selected agent can retrieve relevant passages from this document to answer a wider range of questions. This does not retrain Gemini or change its model; responses still depend on what the indexed documents support. Uploaded originals are kept on the server so they can be backed up.</p>
+            <div class="upload-controls">
+              <label class="sr-only" for="uploadAgent">Assign document to agent</label>
+              <select id="uploadAgent" class="agent-select"><option value="hr">HR Agent</option><option value="it">IT Agent</option><option value="policy">Policy Agent</option></select>
+              <button class="primary-button" type="button" onclick="document.getElementById('fileInput').click()">Choose file</button>
+            </div>
+            <div class="upload-dropzone" id="uploadDropzone" tabindex="0" role="button" aria-label="Choose a document or drop it here">
+              Drop a file here, or <span>choose one</span>
+            </div>
+            <p class="upload-feedback" id="uploadFeedback" role="status"></p>
+          </section>
+          <section class="library-section">
+            <div class="library-heading"><div><h2>Document library</h2><p>Files currently indexed across your agent knowledge bases.</p></div><span id="resultCount" class="result-count"></span></div>
+            <div class="library-toolbar">
+              <label class="document-search"><svg viewBox="0 0 20 20" fill="none" aria-hidden="true"><circle cx="8.75" cy="8.75" r="5.75" stroke="currentColor" stroke-width="1.4"/><path d="m13 13 4 4" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg><span class="sr-only">Search documents</span><input id="searchInput" type="search" placeholder="Find a document…" /></label>
+              <div class="filter-tabs" role="group" aria-label="Filter by agent">
+                ${[['all','All'],['hr','HR'],['it','IT'],['policy','Policy']].map(([value,label]) => `<button type="button" class="${filterAgent === value ? 'selected' : ''}" data-agent-filter="${value}" aria-pressed="${filterAgent === value}">${label}</button>`).join('')}
+              </div>
+            </div>
+            <div class="library-table-wrap"><table class="library-table"><thead><tr><th>File</th><th>Assigned agent</th><th>Size</th><th>Chunks</th><th>Status</th></tr></thead><tbody id="documentRows">${renderDocumentRows()}</tbody></table></div>
+          </section>
+        </section>
+      `;
+      if (!await mountShell('documents', 'Documents', 'Workspace / Documents', mainContent, '', 'admin')) return;
+      document.getElementById('searchInput').addEventListener('input', event => {
+        searchTerm = event.target.value;
+        updateDocumentRows();
+      });
+      document.getElementById('documentRows').addEventListener('click', event => {
+        const button = event.target.closest('[data-remove-agent]');
+        if (button) removeDocument(button.dataset.removeAgent, button.dataset.removeName);
+      });
+      document.querySelectorAll('[data-agent-filter]').forEach(button => {
+        button.addEventListener('click', () => {
+          filterAgent = button.dataset.agentFilter;
+          document.querySelectorAll('[data-agent-filter]').forEach(tab => {
+            const selected = tab.dataset.agentFilter === filterAgent;
+            tab.classList.toggle('selected', selected);
+            tab.setAttribute('aria-pressed', String(selected));
+          });
+          updateDocumentRows();
+        });
+      });
+      const dropzone = document.getElementById('uploadDropzone');
+      dropzone.addEventListener('click', () => document.getElementById('fileInput').click());
+      dropzone.addEventListener('keydown', event => {
+        if (event.key === 'Enter' || event.key === ' ') {
+          event.preventDefault();
+          document.getElementById('fileInput').click();
+        }
+      });
+      ['dragenter', 'dragover'].forEach(name => dropzone.addEventListener(name, event => {
+        event.preventDefault();
+        dropzone.classList.add('dragging');
+      }));
+      ['dragleave', 'drop'].forEach(name => dropzone.addEventListener(name, event => {
+        event.preventDefault();
+        dropzone.classList.remove('dragging');
+      }));
+      dropzone.addEventListener('drop', event => {
+        const file = event.dataTransfer.files[0];
+        if (file) uploadFile(file);
+      });
+      loadDocuments();
+    }
+
+    function updateDocumentRows() {
+      document.getElementById('documentRows').innerHTML = renderDocumentRows();
+      document.getElementById('resultCount').textContent = isLoading ? '' : `${visibleDocuments().length} ${visibleDocuments().length === 1 ? 'file' : 'files'}`;
+    }
+
+    async function loadDocuments() {
+      isLoading = true;
+      pageError = '';
+      updateDocumentRows();
+      try {
+        const response = await API.listDocuments();
+        documents = Array.isArray(response.documents) ? response.documents : [];
+        pageError = '';
+      } catch (error) {
+        pageError = error.message || 'Could not load documents.';
+        documents = [];
+      } finally {
+        isLoading = false;
+        updateDocumentRows();
+        updateDocumentSummary();
+      }
+    }
+
+    function updateDocumentSummary() {
+      document.getElementById('totalDocuments').textContent = documents.length.toLocaleString();
+      AGENTS.forEach(agent => {
+        const count = documents.filter(document => document.agent === agent.id).length;
+        document.getElementById(`count-${agent.id}`).textContent = count.toLocaleString();
+      });
+      const visible = visibleDocuments().length;
+      document.getElementById('resultCount').textContent = `${visible} ${visible === 1 ? 'file' : 'files'}`;
+    }
+
+    async function handleUpload(event) {
+      const file = event.target.files[0];
+      event.target.value = '';
+      if (file) await uploadFile(file);
+    }
+
+    async function uploadFile(file) {
+      if (uploadInProgress) return;
+      const extension = file.name.split('.').pop().toLowerCase();
+      if (!['pdf', 'docx', 'txt', 'text', 'md', 'markdown'].includes(extension)) {
+        setUploadFeedback('Choose a PDF, DOCX, TXT, or Markdown file.', true);
+        return;
+      }
+      const agentId = document.getElementById('uploadAgent').value;
+      uploadInProgress = true;
+      setUploadFeedback(`Indexing ${file.name} for ${AGENTS.find(agent => agent.id === agentId).name}…`);
+      document.querySelectorAll('.upload-controls button, .upload-controls select, #fileInput').forEach(control => { control.disabled = true; });
+      try {
+        const result = await API.uploadDocument(file, agentId);
+        if (result.document?.name) {
+          documentDisplayNames[documentKey(agentId, result.document.name)] = file.name;
+          try {
+            localStorage.setItem(DOCUMENT_DISPLAY_NAMES_KEY, JSON.stringify(documentDisplayNames));
+          } catch (error) {
+            console.error('[EKA] Could not save uploaded document display name:', error);
+          }
+        }
+        setUploadFeedback(result.message || `${result.document.name} was indexed successfully.`);
+        await loadDocuments();
+      } catch (error) {
+        setUploadFeedback(error.message || 'The file could not be uploaded.', true);
+      } finally {
+        uploadInProgress = false;
+        document.querySelectorAll('.upload-controls button, .upload-controls select, #fileInput').forEach(control => { control.disabled = false; });
+      }
+    }
+
+    function setUploadFeedback(message, isError = false) {
+      const feedback = document.getElementById('uploadFeedback');
+      feedback.textContent = message;
+      feedback.classList.toggle('error', isError);
+    }
+
+    async function removeDocument(agent, name) {
+      const label = AGENTS.find(item => item.id === agent)?.name || agent;
+      if (!window.confirm(`Remove "${name}" from the ${label} knowledge base?`)) return;
+      try {
+        await API.deleteDocument(agent, name);
+        delete documentDisplayNames[documentKey(agent, name)];
+        try {
+          localStorage.setItem(DOCUMENT_DISPLAY_NAMES_KEY, JSON.stringify(documentDisplayNames));
+        } catch (error) {
+          console.error('[EKA] Could not update uploaded document display names:', error);
+        }
+        documents = documents.filter(document => !(document.agent === agent && document.name === name));
+        updateDocumentRows();
+        updateDocumentSummary();
+      } catch (error) {
+        window.alert(error.message || 'The document could not be removed.');
+      }
+    }
+
+    renderDocumentsPage();
+  </script>
+</body>
+</html>

@@ -1,0 +1,32 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+*.egg
+
+# Virtual envs
+.venv/
+venv/
+env/
+.env
+
+# Local data (don't commit Chroma DB or uploads)
+data/chroma_db/
+data/huggingface/
+data/uploads/
+backend/data/chroma_db/
+backend/data/uploads/
+data/auth/
+backend/data/auth/
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log

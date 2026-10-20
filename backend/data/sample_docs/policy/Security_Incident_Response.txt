@@ -1,0 +1,20 @@
+SECURITY INCIDENT RESPONSE PROCEDURE
+
+Reporting a phishing email:
+1. Do NOT click any links in the email
+2. Use the 'Report Phishing' button in Outlook (toolbar)
+   OR forward to phishing@company.internal
+3. Delete the email from your inbox
+4. If you already clicked a link or entered credentials:
+   a. Immediately reset your password (see IT_SOP_PasswordReset.pdf)
+   b. Call the IT Security desk at ext. 4700
+   c. Disconnect from the corporate network until cleared
+
+Response SLAs:
+- SOC acknowledgement: within 1 business hour
+- Initial assessment: within 4 business hours
+- Containment: within 24 hours for Severity 1 incidents
+
+Other incident types (lost device, unauthorized access, data leak):
+- Report immediately to security@company.internal
+- Do not attempt to investigate or remediate on your own

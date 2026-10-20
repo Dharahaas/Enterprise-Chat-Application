@@ -1,0 +1,166 @@
+"""Enterprise Knowledge Assistant — FastAPI application entry point.
+
+Run with:
+    uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
+"""
+
+from __future__ import annotations
+
+import logging
+from contextlib import asynccontextmanager
+from pathlib import Path, PurePosixPath
+from time import perf_counter
+from urllib.parse import unquote
+
+from fastapi import FastAPI, Request, Response
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
+from fastapi.responses import RedirectResponse
+
+from app.api.auth_routes import router as auth_router
+from app.api.routes import router as api_router
+from app.auth import SESSION_COOKIE, get_session_user, initialize_auth_store
+from app.config import settings
+
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
+)
+logger = logging.getLogger("eka")
+
+
+def _require_production_knowledge_base(chunk_counts: dict[str, int]) -> None:
+    missing_agents = [agent for agent, count in chunk_counts.items() if count == 0]
+    if missing_agents and settings.environment == "prod":
+        raise RuntimeError(
+            "Production knowledge base is missing indexed collections for: "
+            f"{', '.join(missing_agents)}. Build and verify the sample knowledge base "
+            "before starting the service."
+        )
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Startup + shutdown hooks."""
+    # Startup
+    logger.info("Starting %s v%s", settings.app_name, settings.app_version)
+    logger.info("Environment: %s", settings.environment)
+    logger.info("Vector DB path: %s", settings.vector_db_path)
+    logger.info("Embedding model: %s", settings.embedding_model)
+    initialize_auth_store()
+
+    from app.rag.llm import llm_provider_name
+    logger.info("LLM provider: %s", llm_provider_name())
+
+    # Load the local embedding model before the first employee query.
+    from app.rag.embeddings import get_embeddings
+
+    embedding_start = perf_counter()
+    try:
+        get_embeddings()
+    except Exception as exc:
+        logger.warning(
+            "Embedding warm-up failed stage=startup model=%s error_type=%s",
+            settings.embedding_model,
+            type(exc).__name__,
+        )
+    else:
+        logger.info(
+            "Embedding warm-up complete model=%s elapsed_ms=%d",
+            settings.embedding_model,
+            int((perf_counter() - embedding_start) * 1000),
+        )
+
+    # Auto-seed sample docs on first local development run.
+    from app.rag.vectorstore import count_chunks
+
+    agents = [item.strip() for item in settings.enabled_agents.split(",") if item.strip()]
+    chunk_counts = {agent: count_chunks(agent) for agent in agents}
+    _require_production_knowledge_base(chunk_counts)
+    if sum(chunk_counts.values()) == 0:
+        from app.ingestion.ingest import seed_sample_docs
+
+        logger.info("Vector DB is empty — seeding sample documents...")
+        try:
+            results = seed_sample_docs()
+            seeded = len([r for r in results if "error" not in r])
+            logger.info("Seeded %d sample documents", seeded)
+        except Exception as exc:
+            logger.warning("Auto-seed failed: %s. Run /api/seed manually.", exc)
+    else:
+        logger.info(
+            "Vector DB chunk counts by agent=%s",
+            ",".join(f"{agent}:{count}" for agent, count in chunk_counts.items()),
+        )
+
+    yield
+
+    # Shutdown
+    logger.info("Shutting down %s", settings.app_name)
+
+
+app = FastAPI(
+    title=settings.app_name,
+    version=settings.app_version,
+    docs_url=None if settings.environment == "prod" else "/docs",
+    redoc_url=None if settings.environment == "prod" else "/redoc",
+    openapi_url=None if settings.environment == "prod" else "/openapi.json",
+    description=(
+        "Enterprise Knowledge Assistant backend — RAG + multi-agent. "
+        "Phase 2: Python + FastAPI + LangChain + Chroma."
+    ),
+    lifespan=lifespan,
+)
+
+
+# CORS — allow configured trusted origins and local dev
+origins = [o.strip() for o in settings.cors_origins.split(",") if o.strip()]
+if settings.environment == "dev":
+    origins.extend(
+        ["http://localhost:8081", "http://127.0.0.1:8081"]
+    )
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=origins,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+
+@app.middleware("http")
+async def block_private_frontend_paths(request: Request, call_next):
+    """Keep backend files, local data, and dotfiles out of the static frontend mount."""
+    if request.url.path.startswith("/app/"):
+        components = PurePosixPath(unquote(request.url.path)).parts[2:]
+        if any(
+            component.startswith(".") or component in {"backend", "data"}
+            for component in components
+        ):
+            return Response(status_code=404)
+        page = components[-1] if components else ""
+        if page in {"portal.html", "chat.html", "documents.html", "analytics.html"}:
+            user = get_session_user(request.cookies.get(SESSION_COOKIE))
+            if user is None:
+                return RedirectResponse("/app/index.html", status_code=303)
+            if page in {"documents.html", "analytics.html"} and user.role != "admin":
+                return RedirectResponse("/app/portal.html?access=denied", status_code=303)
+    return await call_next(request)
+
+
+# Mount API routes under /api
+app.include_router(api_router)
+app.include_router(auth_router)
+
+
+# Serve the frontend (Phase 1 static files) at root
+# This lets you run the whole stack from one origin during local dev.
+FRONTEND_DIR = Path(__file__).resolve().parent.parent.parent
+if FRONTEND_DIR.exists():
+    app.mount("/app", StaticFiles(directory=str(FRONTEND_DIR), html=True), name="frontend")
+
+
+@app.get("/")
+async def root():
+    return RedirectResponse("/app/index.html")
