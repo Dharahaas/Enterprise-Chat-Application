@@ -7,6 +7,7 @@ Run with:
 from __future__ import annotations
 
 import logging
+import time
 from contextlib import asynccontextmanager
 from pathlib import Path, PurePosixPath
 from urllib.parse import unquote
@@ -127,6 +128,21 @@ async def block_private_frontend_paths(request: Request, call_next):
             if page in {"documents.html", "analytics.html"} and user.role != "admin":
                 return RedirectResponse("/app/portal.html?access=denied", status_code=303)
     return await call_next(request)
+
+
+@app.middleware("http")
+async def log_chat_request_timing(request: Request, call_next):
+    if request.url.path != "/api/chat":
+        return await call_next(request)
+    start = time.perf_counter()
+    response = await call_next(request)
+    logger.info(
+        "HTTP request complete method=POST path=/api/chat status_code=%d "
+        "http_total_ms=%d",
+        response.status_code,
+        int((time.perf_counter() - start) * 1000),
+    )
+    return response
 
 
 # Mount API routes under /api

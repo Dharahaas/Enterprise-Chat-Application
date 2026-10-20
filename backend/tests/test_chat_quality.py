@@ -19,8 +19,10 @@ class MockLLM:
     def __init__(self, response: Any) -> None:
         self.response = response
         self.messages: list[Any] | None = None
+        self.invocation_count = 0
 
     def invoke(self, messages: list[Any]) -> Any:
+        self.invocation_count += 1
         self.messages = messages
         if isinstance(self.response, Exception):
             raise self.response
@@ -300,7 +302,7 @@ def test_it_prompt_allows_plain_language_definition_but_grounds_company_details(
     system_message = model.messages[0].content
     assert "plain-language general explanation" in system_message
     assert "Ground company-specific configuration, access, and support procedures" in system_message
-    assert "do not invent support procedures" in system_message
+    assert "do not invent support procedures" in system_message.casefold()
 
 
 @pytest.mark.parametrize(
@@ -397,6 +399,84 @@ def test_it_mfa_question_uses_documented_steps_and_escalation(
     assert result["sources"][0]["document"] == "IT_Network_Guide_v2.pdf"
     assert model.messages is not None
     assert "re-register Microsoft Authenticator via IT Portal" in str(model.messages)
+
+
+def test_it_otp_response_preserves_full_documented_condition_and_citation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    otp_source = RetrievedChunk(
+        document="IT_SOP_PasswordReset.pdf",
+        page=2,
+        section="1",
+        score=0.76,
+        snippet=(
+            "If you do not receive the OTP within 2 minutes, contact the IT desk "
+            "at ext. 4500."
+        ),
+    )
+    model = mock_generation(
+        monkeypatch,
+        [otp_source],
+        AIMessage(content="Contact the IT desk at ext. 4500."),
+    )
+
+    result = post_chat("what if i dont get an otp", agent="it")
+
+    assert result["answer"] == (
+        "If you do not receive the OTP within 2 minutes, contact the IT desk at ext. 4500."
+    )
+    assert result["sources"][0]["document"] == "IT_SOP_PasswordReset.pdf"
+    assert result["sources"][0]["page"] == 2
+    assert result["sources"][0]["section"] == "1"
+    assert model.invocation_count == 1
+
+
+def test_it_simpler_follow_up_preserves_source_conditions() -> None:
+    source = RetrievedChunk(
+        document="IT_SOP_PasswordReset.pdf",
+        page=None,
+        section="1",
+        score=0.76,
+        snippet=(
+            "If you do not receive the OTP within 2 minutes, contact the IT desk "
+            "at ext. 4500."
+        ),
+    )
+
+    answer = pipeline._preserve_procedural_details(
+        "it",
+        "What if I do not get an OTP? Any simpler way?",
+        "Contact the IT desk at ext. 4500.",
+        [source],
+    )
+
+    assert answer == (
+        "If you do not receive the OTP within 2 minutes, contact the IT desk at ext. 4500."
+    )
+
+
+def test_it_mfa_failure_preserves_documented_contact_when_generation_omits_it() -> None:
+    source = RetrievedChunk(
+        document="IT_Network_Guide_v2.pdf",
+        page=None,
+        section="2",
+        score=0.72,
+        snippet=(
+            "If MFA fails: re-register Microsoft Authenticator via IT Portal.\n"
+            "- Contact IT desk: ext. 4500 or it@company.com"
+        ),
+    )
+
+    answer = pipeline._preserve_procedural_details(
+        "it",
+        "What if my MFA fails?",
+        "Re-register Microsoft Authenticator via IT Portal.",
+        [source],
+    )
+
+    assert "Re-register Microsoft Authenticator" in answer
+    assert "ext. 4500" in answer
+    assert "it@company.com" in answer
 
 
 def test_it_helpdesk_follow_up_prioritizes_escalation_retrieval() -> None:

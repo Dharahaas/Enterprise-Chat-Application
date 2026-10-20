@@ -2,13 +2,17 @@
 
 from __future__ import annotations
 
+from functools import lru_cache
 from pathlib import Path
+from threading import RLock
 from typing import Any
 
 from langchain_chroma import Chroma
 from langchain_core.embeddings import Embeddings
 
 from app.config import agent_collections, settings
+
+_vectorstore_lock = RLock()
 
 
 def _persist_dir() -> Path:
@@ -17,16 +21,30 @@ def _persist_dir() -> Path:
     return p
 
 
+@lru_cache(maxsize=3)
+def _cached_vectorstore(
+    collection_name: str,
+    persist_dir: str,
+    embeddings: Embeddings,
+) -> Chroma:
+    return Chroma(
+        collection_name=collection_name,
+        embedding_function=embeddings,
+        persist_directory=persist_dir,
+    )
+
+
 def get_vectorstore_for_agent(agent_id: str, embeddings: Embeddings) -> Chroma:
     """Return the Chroma vector store for the given agent's namespace."""
     collection_name = agent_collections().get(agent_id)
     if not collection_name:
         raise ValueError(f"No collection mapping for agent: {agent_id}")
-    return Chroma(
-        collection_name=collection_name,
-        embedding_function=embeddings,
-        persist_directory=str(_persist_dir()),
-    )
+    with _vectorstore_lock:
+        return _cached_vectorstore(
+            collection_name,
+            str(_persist_dir()),
+            embeddings,
+        )
 
 
 def count_chunks(agent_id: str) -> int:

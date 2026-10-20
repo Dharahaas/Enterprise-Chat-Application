@@ -254,6 +254,57 @@ def test_chat_handler_runs_outside_the_event_loop():
     assert not inspect.iscoroutinefunction(chat)
 
 
+def test_health_endpoint_responds_during_a_slow_chat_request(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from concurrent.futures import ThreadPoolExecutor, TimeoutError
+    from threading import Event
+
+    from fastapi.testclient import TestClient
+    from app.api import routes
+    from app.main import app
+    from app.rag.pipeline import RagResult
+    from tests.conftest import authenticate_client
+
+    chat_started = Event()
+    finish_chat = Event()
+
+    def slow_rag(agent: str, question: str) -> RagResult:
+        chat_started.set()
+        if not finish_chat.wait(timeout=3):
+            raise TimeoutError("Test chat handler was not released.")
+        return RagResult(
+            answer="Mock response",
+            agent=agent,
+            sources=[],
+            latency_ms=500,
+            llm_provider="gemini",
+        )
+
+    monkeypatch.setattr(routes, "run_rag", slow_rag)
+
+    with TestClient(app) as client:
+        authenticate_client(client, "employee")
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            chat_future = executor.submit(
+                client.post,
+                "/api/chat",
+                json={"question": "How do I configure VPN?", "agent": "it"},
+            )
+            try:
+                assert chat_started.wait(timeout=1)
+                health_future = executor.submit(client.get, "/api/health")
+                try:
+                    response = health_future.result(timeout=0.5)
+                except TimeoutError:
+                    pytest.fail("Liveness was blocked by a concurrent chat request.")
+                assert response.status_code == 200
+                assert response.json()["status"] == "ok"
+            finally:
+                finish_chat.set()
+            assert chat_future.result(timeout=2).status_code == 200
+
+
 def test_startup_does_not_load_embedding_model(monkeypatch):
     from fastapi.testclient import TestClient
     from app.main import app
@@ -298,6 +349,46 @@ def test_chroma_onnx_embeddings_preserve_384_dimensions(monkeypatch):
     assert all(len(vector) == 384 for vector in document_vectors)
     assert len(constructed) == 1
     assert calls == [["query"], ["first", "second"], ["text"]]
+
+
+def test_vectorstore_wrapper_is_reused_for_same_agent_and_embeddings(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    from langchain_core.embeddings import Embeddings
+    from app.rag import vectorstore
+
+    constructed = []
+
+    class FakeEmbeddings(Embeddings):
+        def embed_documents(self, texts: list[str]) -> list[list[float]]:
+            return []
+
+        def embed_query(self, text: str) -> list[float]:
+            return []
+
+    class FakeChroma:
+        def __init__(self, **kwargs):
+            constructed.append(kwargs)
+
+    monkeypatch.setattr(vectorstore, "Chroma", FakeChroma)
+    monkeypatch.setattr(
+        vectorstore.settings,
+        "vector_db_path",
+        str(tmp_path / "chroma"),
+    )
+    vectorstore._cached_vectorstore.cache_clear()
+    embeddings = FakeEmbeddings()
+
+    try:
+        first = vectorstore.get_vectorstore_for_agent("it", embeddings)
+        second = vectorstore.get_vectorstore_for_agent("it", embeddings)
+
+        assert first is second
+        assert len(constructed) == 1
+        assert constructed[0]["collection_name"] == "eka_it"
+    finally:
+        vectorstore._cached_vectorstore.cache_clear()
 
 
 def test_eval_runner(monkeypatch):

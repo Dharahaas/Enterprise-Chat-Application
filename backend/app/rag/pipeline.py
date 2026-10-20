@@ -15,7 +15,7 @@ from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from app.agents.agent_specs import get_agent
 from app.agents.router import normalize_query
 from app.config import settings
-from app.rag.embeddings import get_embeddings
+from app.rag.embeddings import get_embeddings, measure_embedding_time
 from app.rag.llm import (
     LLMConfigurationError,
     LLM_NOT_CONFIGURED_MESSAGE,
@@ -201,11 +201,101 @@ def _it_procedure_question(question: str) -> bool:
     )
 
 
+def _preserve_procedural_details(
+    agent_id: str,
+    question: str,
+    answer: str,
+    chunks: list[RetrievedChunk],
+) -> str:
+    if agent_id != "it":
+        return answer
+
+    stop_words = {
+        "about", "after", "again", "before", "can", "could", "does", "dont",
+        "for", "from", "get", "how", "into", "that", "them", "then", "there",
+        "this", "what", "when", "where", "which", "with", "would", "you",
+    }
+    question_terms = {
+        term
+        for term in re.findall(r"[a-z0-9]+", question.casefold())
+        if len(term) > 2 and term not in stop_words
+    }
+    asks_for_escalation = bool(
+        re.search(
+            r"\b(?:fail\w*|problem|issue|error|trouble|not working|cannot|can't|contact)\b",
+            question.casefold(),
+        )
+    )
+    sentence_pattern = re.compile(r"(?<=[.!?])\s+(?=[A-Z])|\n+")
+    procedural_pattern = re.compile(
+        r"\b(?:if|unless|within|after|before|at least|no more than|"
+        r"must|required|cannot|contact|escalat\w*)\b",
+        re.IGNORECASE,
+    )
+    complete_answer = answer
+
+    for chunk in chunks:
+        for sentence in sentence_pattern.split(chunk.snippet):
+            sentence = sentence.strip(" \t-*")
+            if (
+                not sentence
+                or not re.search(r"\d", sentence)
+                or not procedural_pattern.search(sentence)
+            ):
+                continue
+            sentence_terms = {
+                term
+                for term in re.findall(r"[a-z0-9]+", sentence.casefold())
+                if len(term) > 2 and term not in stop_words
+            }
+            is_contact_instruction = bool(
+                re.search(r"\b(?:contact|escalat\w*)\b", sentence, re.IGNORECASE)
+            )
+            if not question_terms.intersection(sentence_terms) and not (
+                asks_for_escalation and is_contact_instruction
+            ):
+                continue
+            required_numbers = set(re.findall(r"\b\d+(?:\.\d+)?\b", sentence))
+            present_numbers = set(
+                re.findall(r"\b\d+(?:\.\d+)?\b", complete_answer)
+            )
+            if required_numbers.issubset(present_numbers):
+                continue
+            complete_terms = {
+                term
+                for term in re.findall(r"[a-z0-9]+", complete_answer.casefold())
+                if len(term) > 2 and term not in stop_words and not term.isdigit()
+            }
+            answer_overlap = complete_terms.intersection(sentence_terms)
+            if not answer_overlap:
+                if asks_for_escalation and is_contact_instruction:
+                    complete_answer = f"{complete_answer.rstrip()} {sentence}"
+                continue
+            if complete_answer == answer and complete_terms.issubset(sentence_terms):
+                complete_answer = sentence
+            else:
+                complete_answer = f"{complete_answer.rstrip()} {sentence}"
+    return complete_answer
+
+
 def retrieve(agent_id: str, question: str) -> list[RetrievedChunk]:
     """Retrieve, score, and deduplicate passages in the selected agent namespace."""
     try:
+        embedding_client_start = time.perf_counter()
         embeddings = get_embeddings()
+        embedding_client_ms = int(
+            (time.perf_counter() - embedding_client_start) * 1000
+        )
+        vectorstore_start = time.perf_counter()
         vectorstore = get_vectorstore_for_agent(agent_id, embeddings)
+        vectorstore_open_ms = int((time.perf_counter() - vectorstore_start) * 1000)
+        logger.info(
+            "RAG resources ready agent=%s embedding_client_ms=%d "
+            "vectorstore_open_ms=%d",
+            agent_id,
+            embedding_client_ms,
+            vectorstore_open_ms,
+        )
         queries = _retrieval_queries(agent_id, question)
         metric = _collection_metric(vectorstore)
         collection = getattr(
@@ -215,10 +305,22 @@ def retrieve(agent_id: str, question: str) -> list[RetrievedChunk]:
         )
         candidates: dict[tuple[str, str], RetrievedChunk] = {}
         retrieval_start = time.perf_counter()
-        for query in queries:
-            docs_with_distances = vectorstore.similarity_search_with_score(
-                query,
-                k=settings.retrieval_top_k,
+        for query_index, query in enumerate(queries, start=1):
+            query_start = time.perf_counter()
+            with measure_embedding_time() as embedding_timer:
+                docs_with_distances = vectorstore.similarity_search_with_score(
+                    query,
+                    k=settings.retrieval_top_k,
+                )
+            query_elapsed_ms = (time.perf_counter() - query_start) * 1000
+            logger.info(
+                "Retrieval query complete agent=%s query_index=%d "
+                "embedding_ms=%d chroma_query_ms=%d query_total_ms=%d",
+                agent_id,
+                query_index,
+                round(embedding_timer.elapsed_ms),
+                max(0, round(query_elapsed_ms - embedding_timer.elapsed_ms)),
+                round(query_elapsed_ms),
             )
             for doc, distance in docs_with_distances:
                 metadata = doc.metadata or {}
@@ -245,9 +347,21 @@ def retrieve(agent_id: str, question: str) -> list[RetrievedChunk]:
             )
         ):
             fallback_query = "IT help desk support contact escalation"
-            docs_with_distances = vectorstore.similarity_search_with_score(
-                fallback_query,
-                k=settings.retrieval_top_k,
+            query_start = time.perf_counter()
+            with measure_embedding_time() as embedding_timer:
+                docs_with_distances = vectorstore.similarity_search_with_score(
+                    fallback_query,
+                    k=settings.retrieval_top_k,
+                )
+            query_elapsed_ms = (time.perf_counter() - query_start) * 1000
+            logger.info(
+                "Retrieval query complete agent=%s query_index=%d "
+                "embedding_ms=%d chroma_query_ms=%d query_total_ms=%d fallback=true",
+                agent_id,
+                len(queries) + 1,
+                round(embedding_timer.elapsed_ms),
+                max(0, round(query_elapsed_ms - embedding_timer.elapsed_ms)),
+                round(query_elapsed_ms),
             )
             for doc, distance in docs_with_distances:
                 metadata = doc.metadata or {}
@@ -536,14 +650,19 @@ def run_rag(
             agent_id=agent_id,
             chunks=len(top_chunks),
         ) as generation_span:
+            client_start = time.perf_counter()
             model = get_llm()
+            llm_client_init_ms = int(
+                (time.perf_counter() - client_start) * 1000
+            )
             logger.info(
                 "Answer generation invoking stage=invoke agent=%s provider=%s "
-                "model=%s chunks=%d",
+                "model=%s chunks=%d llm_client_init_ms=%d llm_call_count=1",
                 agent_id,
                 llm_provider_name(),
                 llm_model_name(),
                 len(top_chunks),
+                llm_client_init_ms,
             )
             provider_start = time.perf_counter()
             response = model.invoke(prompt_messages)
@@ -551,6 +670,12 @@ def run_rag(
             answer_text = _extract_answer(response)
             if not answer_text:
                 raise MalformedModelResponseError("empty_response")
+            answer_text = _preserve_procedural_details(
+                agent_id,
+                retrieval_question,
+                answer_text,
+                top_chunks,
+            )
             generation_span.metadata["llm_provider"] = llm_provider_name()
             generation_span.metadata["answer_chars"] = len(answer_text)
         logger.info(
