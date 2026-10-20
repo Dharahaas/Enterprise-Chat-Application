@@ -10,10 +10,19 @@ from pydantic import BaseModel, Field
 
 # ---------- Chat ----------
 
+class ChatHistoryMessage(BaseModel):
+    role: Literal["user", "assistant"]
+    content: str = Field(..., min_length=1, max_length=2000)
+
+
 class ChatRequest(BaseModel):
     question: str = Field(..., min_length=1, max_length=2000)
     agent: Literal["hr", "it", "policy"] | None = None
     conversation_id: str | None = None
+    conversation_history: list[ChatHistoryMessage] = Field(
+        default_factory=list,
+        max_length=6,
+    )
 
 
 class SourceChunk(BaseModel):

@@ -17,7 +17,7 @@
     const requestedAgentId = chatParams.get('agent');
     let activeAgent = AGENTS.find(agent => agent.id === requestedAgentId) || AGENTS[0];
     let conversations = [];
-    let loadedConversationUser = null;
+    let loadedConversationScope = null;
     let currentConversationId = null;
     let messages = [];
     let backendLive = false;
@@ -265,8 +265,9 @@
     async function renderChatPage() {
       const user = await requireAuth();
       if (!user) return;
-      if (loadedConversationUser !== user.username) {
-        loadedConversationUser = user.username;
+      const conversationScope = chatStorageKey();
+      if (loadedConversationScope !== conversationScope) {
+        loadedConversationScope = conversationScope;
         conversations = loadConversations();
         const latest = latestConversationForAgent(activeAgent.id);
         if (latest) {
@@ -460,7 +461,24 @@
 
       let reply;
       try {
-        const response = await API.chat(question, conversation.agent);
+        const conversationHistory = conversation.messages
+          .slice(0, -1)
+          .filter(message =>
+            ['user', 'agent'].includes(message.role) &&
+            !message.isError &&
+            message.agent === conversation.agent
+          )
+          .slice(-6)
+          .map(message => ({
+            role: message.role === 'agent' ? 'assistant' : 'user',
+            content: message.content,
+          }));
+        const response = await API.chat(
+          question,
+          conversation.agent,
+          conversation.id,
+          conversationHistory,
+        );
         const providerMessage = providerErrorMessage(response.error_code);
         reply = {
           role: 'agent',

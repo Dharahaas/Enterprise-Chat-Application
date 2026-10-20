@@ -11,6 +11,7 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from fastapi.responses import JSONResponse, PlainTextResponse
+from starlette.concurrency import run_in_threadpool
 
 from app.agents.router import (
     classify_conversation_intent,
@@ -49,7 +50,6 @@ _QUERY_LOG: list[dict] = []
 async def health() -> HealthResponse:
     from app.config import agent_collections
     from app.rag.llm import llm_provider_name
-    from app.rag.tracing import is_langsmith_enabled
 
     return HealthResponse(
         status="ok",
@@ -66,7 +66,7 @@ async def health() -> HealthResponse:
 # ---------- Chat ----------
 
 @router.post("/chat", response_model=ChatResponse, dependencies=[Depends(require_csrf)])
-async def chat(req: ChatRequest) -> ChatResponse:
+def chat(req: ChatRequest) -> ChatResponse:
     """Handle simple conversation locally; use RAG for knowledge questions."""
     start = perf_counter()
     question = normalize_query(req.question)
@@ -81,20 +81,30 @@ async def chat(req: ChatRequest) -> ChatResponse:
             llm_provider="none",
         )
     else:
-        result = run_rag(resolved_agent_id, question)
+        if req.conversation_history:
+            result = run_rag(
+                resolved_agent_id,
+                question,
+                [(message.role, message.content) for message in req.conversation_history],
+            )
+        else:
+            result = run_rag(resolved_agent_id, question)
     agent_id = result.agent
     logger.info(
-        "Chat routing selected_agent=%s resolved_agent=%s responding_agent=%s",
+        "Chat request complete selected_agent=%s resolved_agent=%s "
+        "responding_agent=%s history_messages=%d request_ms=%d rag_ms=%d",
         req.agent or "auto",
         resolved_agent_id,
         result.agent,
+        len(req.conversation_history),
+        int((perf_counter() - start) * 1000),
+        result.latency_ms,
     )
 
     # Log for analytics + metrics
     _QUERY_LOG.append(
         {
             "agent": agent_id,
-            "question": req.question,
             "latency_ms": result.latency_ms,
             "sources_count": len(result.sources),
             "timestamp": datetime.now(timezone.utc).isoformat(),
@@ -132,7 +142,7 @@ async def chat(req: ChatRequest) -> ChatResponse:
     response_model=DocumentListResponse,
     dependencies=[Depends(require_admin)],
 )
-async def list_documents() -> DocumentListResponse:
+def list_documents() -> DocumentListResponse:
     """List all indexed documents across all agents."""
     docs: list[DocumentInfo] = []
     by_agent: dict[str, int] = {}
@@ -189,7 +199,7 @@ async def upload_document(
     saved_path.write_bytes(await file.read())
 
     try:
-        result = ingest_file(saved_path, agent)
+        result = await run_in_threadpool(ingest_file, saved_path, agent)
     except Exception as e:
         saved_path.unlink(missing_ok=True)
         saved_path.parent.rmdir()
@@ -211,7 +221,7 @@ async def upload_document(
     "/documents/{agent}/{doc_name}",
     dependencies=[Depends(require_admin), Depends(require_csrf)],
 )
-async def remove_document(agent: str, doc_name: str) -> dict:
+def remove_document(agent: str, doc_name: str) -> dict:
     """Delete all chunks of a document from the agent's namespace."""
     if (
         agent not in {item.strip() for item in settings.enabled_agents.split(",")}
@@ -240,7 +250,7 @@ async def remove_document(agent: str, doc_name: str) -> dict:
     response_model=AnalyticsResponse,
     dependencies=[Depends(require_admin)],
 )
-async def analytics() -> AnalyticsResponse:
+def analytics() -> AnalyticsResponse:
     """Return aggregated analytics. Phase 2: live counts from query log + DB."""
     # Query volume by agent
     by_agent: dict[str, int] = {a: 0 for a in settings.enabled_agents.split(",") if a.strip()}
@@ -324,7 +334,7 @@ _LAST_EVAL_RESULT: dict | None = None
     "/seed",
     dependencies=[Depends(require_admin), Depends(require_csrf)],
 )
-async def seed_db(force: bool = False) -> dict:
+def seed_db(force: bool = False) -> dict:
     """Seed the vector DB with sample documents."""
     from app.ingestion.ingest import seed_sample_docs
 
@@ -335,7 +345,7 @@ async def seed_db(force: bool = False) -> dict:
 # ---------- Eval (Phase 3) ----------
 
 @router.get("/eval/summary", dependencies=[Depends(require_admin)])
-async def eval_summary() -> dict:
+def eval_summary() -> dict:
     """Return a summary of the default eval set without running it."""
     from app.eval import eval_set_summary
     return eval_set_summary()
@@ -345,7 +355,7 @@ async def eval_summary() -> dict:
     "/eval/run",
     dependencies=[Depends(require_admin), Depends(require_csrf)],
 )
-async def eval_run(save: bool = True) -> dict:
+def eval_run(save: bool = True) -> dict:
     """Run the RAGAS evaluation pipeline against the gold eval set.
 
     This is a long-running endpoint (~30s for 24 questions on CPU).
@@ -364,7 +374,7 @@ async def eval_run(save: bool = True) -> dict:
 
 
 @router.get("/eval/latest", dependencies=[Depends(require_admin)])
-async def eval_latest() -> dict:
+def eval_latest() -> dict:
     """Return the most recent eval run results (or null if none yet)."""
     return _LAST_EVAL_RESULT or {"message": "No eval run yet. POST /api/eval/run to start."}
 
@@ -376,6 +386,6 @@ async def eval_latest() -> dict:
     response_class=PlainTextResponse,
     dependencies=[Depends(require_admin)],
 )
-async def prometheus_metrics() -> str:
+def prometheus_metrics() -> str:
     """Expose metrics in Prometheus exposition format."""
     return metrics.expose()

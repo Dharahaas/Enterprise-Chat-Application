@@ -228,6 +228,32 @@ def test_health_endpoint():
     assert "hr" in data["agents"]
 
 
+def test_health_endpoint_does_not_initialize_llm_or_embeddings(monkeypatch):
+    from fastapi.testclient import TestClient
+    from app.main import app
+    from app.rag import embeddings, llm, vectorstore
+
+    monkeypatch.setattr(vectorstore, "count_chunks", lambda agent: 1)
+
+    def unexpected_initialization():
+        raise AssertionError("Liveness must not initialize AI dependencies.")
+
+    monkeypatch.setattr(embeddings, "get_embeddings", unexpected_initialization)
+    monkeypatch.setattr(llm, "get_llm", unexpected_initialization)
+
+    response = TestClient(app).get("/api/health")
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "ok"
+
+
+def test_chat_handler_runs_outside_the_event_loop():
+    import inspect
+    from app.api.routes import chat
+
+    assert not inspect.iscoroutinefunction(chat)
+
+
 def test_startup_does_not_load_embedding_model(monkeypatch):
     from fastapi.testclient import TestClient
     from app.main import app

@@ -154,10 +154,15 @@ const API = (() => {
         localStorage.removeItem(CHAT_USER_SCOPE_KEY);
       }
     },
-    chat: (question, agent) =>
+    chat: (question, agent, conversationId, conversationHistory) =>
       request('/api/chat', {
         method: 'POST',
-        body: JSON.stringify({ question, agent }),
+        body: JSON.stringify({
+          question,
+          agent,
+          conversation_id: conversationId,
+          conversation_history: conversationHistory,
+        }),
       }),
     listDocuments: () => request('/api/documents'),
     uploadDocument: (file, agent) => {

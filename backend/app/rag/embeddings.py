@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import logging
+import time
 from functools import lru_cache
 from typing import Any
 
@@ -9,6 +11,8 @@ from chromadb.utils.embedding_functions import ONNXMiniLM_L6_V2
 from langchain_core.embeddings import Embeddings
 
 from app.config import settings
+
+logger = logging.getLogger(__name__)
 
 
 class ChromaONNXEmbeddings(Embeddings):
@@ -20,10 +24,17 @@ class ChromaONNXEmbeddings(Embeddings):
         )
 
     def embed_documents(self, texts: list[str]) -> list[list[float]]:
-        return [
+        start = time.perf_counter()
+        vectors = [
             [float(value) for value in vector]
             for vector in self._embedding_function(texts)
         ]
+        logger.info(
+            "Embedding complete provider=chroma_onnx items=%d elapsed_ms=%d",
+            len(texts),
+            int((time.perf_counter() - start) * 1000),
+        )
+        return vectors
 
     def embed_query(self, text: str) -> list[float]:
         return self.embed_documents([text])[0]

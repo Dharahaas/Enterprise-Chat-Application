@@ -128,11 +128,26 @@ pytest tests/ -v
 Run the RAG pipeline for an authenticated employee or administrator. Requests
 require the session cookie and `X-CSRF-Token` header. Body:
 ```json
-{"question": "...", "agent": "hr", "conversation_id": "optional"}
+{
+  "question": "...",
+  "agent": "it",
+  "conversation_id": "optional",
+  "conversation_history": [
+    {"role": "user", "content": "How do I set up VPN?"},
+    {"role": "assistant", "content": "Follow these setup steps..."}
+  ]
+}
 ```
 `agent` is optional. When supplied (as the chat UI does), the selected agent is
 honored. If omitted, the backend classifies the question and routes it to an
-agent automatically.
+agent automatically. `conversation_history` is optional and should contain only
+the preceding turns from the same conversation (up to six messages, 2,000
+characters each); it is used to resolve follow-ups and is not persisted by the
+backend.
+
+### `GET /api/health`
+Lightweight liveness endpoint for Render. It returns application status without
+calling Gemini, initializing embeddings, or retrieving documents.
 
 ### `GET /api/documents`
 List all indexed documents across all agents (administrator only).

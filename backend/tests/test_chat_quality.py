@@ -50,13 +50,19 @@ def mock_generation(
     return model
 
 
-def post_chat(question: str, agent: str | None = None) -> dict[str, Any]:
+def post_chat(
+    question: str,
+    agent: str | None = None,
+    conversation_history: list[dict[str, str]] | None = None,
+) -> dict[str, Any]:
     from fastapi.testclient import TestClient
     from app.main import app
 
     body: dict[str, Any] = {"question": question}
     if agent is not None:
         body["agent"] = agent
+    if conversation_history is not None:
+        body["conversation_history"] = conversation_history
     client = TestClient(app)
     from tests.conftest import authenticate_client
     authenticate_client(client, "employee")
@@ -297,6 +303,228 @@ def test_it_prompt_allows_plain_language_definition_but_grounds_company_details(
     assert "do not invent support procedures" in system_message
 
 
+@pytest.mark.parametrize(
+    ("question", "previous_question", "expected_query"),
+    [
+        ("Any simpler way?", "How do I set up VPN?", "How do I set up VPN? Any simpler way?"),
+        ("What if that fails?", "What if my MFA fails?", "What if my MFA fails? What if that fails?"),
+        ("What about Windows?", "How do I set up VPN?", "How do I set up VPN? What about Windows?"),
+        ("Where do I contact them?", "How do I set up VPN?", "How do I set up VPN? Where do I contact them?"),
+    ],
+)
+def test_it_follow_up_retrieval_keeps_previous_question_context(
+    question: str,
+    previous_question: str,
+    expected_query: str,
+) -> None:
+    assert pipeline._retrieval_topic_question(
+        question,
+        [("user", previous_question), ("assistant", "Use the documented procedure.")],
+    ) == expected_query
+
+
+def test_it_vpn_query_prioritizes_os_setup_instructions() -> None:
+    assert pipeline._retrieval_queries("it", "How to set up VPN on Windows?") == [
+        "How to set up VPN on Windows? Windows Cisco AnyConnect VPN configuration"
+    ]
+
+
+def test_it_direct_vpn_setup_uses_relevant_documented_steps(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    vpn_context = RetrievedChunk(
+        document="IT_Network_Guide_v2.pdf",
+        page=None,
+        section="2",
+        score=0.74,
+        snippet=(
+            "Windows: Use Cisco AnyConnect. Install it from the IT Self-Service "
+            "Portal, open it, enter vpn.company.com, sign in with corporate "
+            "credentials, then enter the Microsoft Authenticator 2FA token."
+        ),
+    )
+    model = mock_generation(
+        monkeypatch,
+        [vpn_context],
+        AIMessage(
+            content=(
+                "1. Install Cisco AnyConnect from the IT Self-Service Portal.\n"
+                "2. Open it and enter vpn.company.com.\n"
+                "3. Sign in with your corporate credentials and enter your "
+                "Microsoft Authenticator 2FA token."
+            )
+        ),
+    )
+
+    result = post_chat("How do I set up VPN on Windows?", agent="it")
+
+    assert "1. Install Cisco AnyConnect" in result["answer"]
+    assert result["sources"][0]["document"] == "IT_Network_Guide_v2.pdf"
+    assert model.messages is not None
+    assert "do not open with a definition" in str(model.messages).casefold()
+    assert "vpn.company.com" in str(model.messages)
+
+
+def test_it_mfa_question_uses_documented_steps_and_escalation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    mfa_context = RetrievedChunk(
+        document="IT_Network_Guide_v2.pdf",
+        page=None,
+        section="2",
+        score=0.72,
+        snippet=(
+            "If MFA fails: re-register Microsoft Authenticator via IT Portal. "
+            "Contact IT desk: ext. 4500 or it@company.com."
+        ),
+    )
+    model = mock_generation(
+        monkeypatch,
+        [mfa_context],
+        AIMessage(
+            content=(
+                "Re-register Microsoft Authenticator via the IT Portal. "
+                "If you still cannot sign in, contact the IT desk at ext. 4500 "
+                "or it@company.com."
+            )
+        ),
+    )
+
+    result = post_chat("What if my MFA fails?", agent="it")
+
+    assert "re-register microsoft authenticator" in result["answer"].casefold()
+    assert "ext. 4500" in result["answer"]
+    assert result["sources"][0]["document"] == "IT_Network_Guide_v2.pdf"
+    assert model.messages is not None
+    assert "re-register Microsoft Authenticator via IT Portal" in str(model.messages)
+
+
+def test_it_helpdesk_follow_up_prioritizes_escalation_retrieval() -> None:
+    query = pipeline._retrieval_topic_question(
+        "Where do I contact them?",
+        [("user", "What if my MFA fails?")],
+    )
+
+    assert pipeline._retrieval_queries("it", query) == [
+        "What if my MFA fails? Where do I contact them? IT desk support contact escalation"
+    ]
+
+
+def test_it_missing_procedure_falls_back_to_documented_support_contact(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from langchain_core.documents import Document
+
+    class FakeCollection:
+        name = "eka_it"
+        metadata = {"hnsw:space": "l2"}
+
+    class FakeStore:
+        _collection = FakeCollection()
+
+        def __init__(self) -> None:
+            self.queries: list[str] = []
+
+        def similarity_search_with_score(self, query: str, k: int):
+            self.queries.append(query)
+            if query == "IT help desk support contact escalation":
+                return [
+                    (
+                        Document(
+                            page_content="Contact the IT desk at ext. 4500.",
+                            metadata={"source": "IT_Support_Guide.txt"},
+                        ),
+                        0.2,
+                    )
+                ]
+            return [
+                (
+                    Document(
+                        page_content="Unrelated software inventory.",
+                        metadata={"source": "Asset_Policy.docx"},
+                    ),
+                    1.7,
+                )
+            ]
+
+    store = FakeStore()
+    monkeypatch.setattr(pipeline, "get_embeddings", lambda: object())
+    monkeypatch.setattr(
+        pipeline,
+        "get_vectorstore_for_agent",
+        lambda agent, embeddings: store,
+    )
+
+    chunks = pipeline.retrieve("it", "How do I configure the unsupported tool?")
+
+    assert store.queries[-1] == "IT help desk support contact escalation"
+    assert len(chunks) == 1
+    assert chunks[0].document == "IT_Support_Guide.txt"
+    assert "ext. 4500" in chunks[0].snippet
+
+
+def test_it_follow_up_context_is_sent_to_the_model_and_sources_remain_grounded(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    vpn_context = RetrievedChunk(
+        document="IT_Network_Guide_v2.pdf",
+        page=None,
+        section="2",
+        score=0.7,
+        snippet="Windows uses Cisco AnyConnect with the same VPN setup flow.",
+    )
+    model = mock_generation(
+        monkeypatch,
+        [vpn_context],
+        AIMessage(content="1. Open Cisco AnyConnect and follow the same setup flow."),
+    )
+
+    result = post_chat(
+        "What about Windows?",
+        agent="it",
+        conversation_history=[
+            {"role": "user", "content": "How do I set up VPN?"},
+            {"role": "assistant", "content": "Here are the setup steps."},
+        ],
+    )
+
+    assert result["sources"][0]["document"] == "IT_Network_Guide_v2.pdf"
+    assert model.messages is not None
+    prompt_text = str(model.messages)
+    assert "How do I set up VPN?" in prompt_text
+    assert "Windows uses Cisco AnyConnect" in prompt_text
+
+
+def test_it_simpler_follow_up_keeps_the_previous_topic(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    vpn_context = RetrievedChunk(
+        document="IT_Network_Guide_v2.pdf",
+        page=None,
+        section="2",
+        score=0.71,
+        snippet="Open AnyConnect, enter vpn.company.com, and sign in with your credentials.",
+    )
+    model = mock_generation(
+        monkeypatch,
+        [vpn_context],
+        AIMessage(content="1. Open AnyConnect. 2. Enter vpn.company.com and sign in."),
+    )
+
+    result = post_chat(
+        "Any simpler way?",
+        agent="it",
+        conversation_history=[
+            {"role": "user", "content": "How do I set up VPN?"},
+            {"role": "assistant", "content": "Here are all six detailed steps."},
+        ],
+    )
+
+    assert result["answer"].startswith("1. Open AnyConnect")
+    assert model.messages is not None
+    assert "How do I set up VPN?" in str(model.messages)
+
+
 def test_unrelated_low_confidence_matches_are_filtered(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -311,6 +539,22 @@ def test_unrelated_low_confidence_matches_are_filtered(
     assert "couldn't find enough relevant information" in result.answer.lower()
     assert result.sources == []
     assert model.messages is None
+
+
+def test_chat_analytics_does_not_retain_raw_question(monkeypatch: pytest.MonkeyPatch) -> None:
+    from app.api import routes
+
+    monkeypatch.setattr(routes, "_QUERY_LOG", [])
+    mock_generation(
+        monkeypatch,
+        sample_chunks(),
+        AIMessage(content="The relevant HR document supports this answer."),
+    )
+
+    post_chat("A private question that should not be retained", agent="hr")
+
+    assert len(routes._QUERY_LOG) == 1
+    assert "question" not in routes._QUERY_LOG[0]
 
 
 def test_marginal_retrieval_matches_are_filtered() -> None:
