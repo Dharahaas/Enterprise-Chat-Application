@@ -311,6 +311,7 @@ def test_it_prompt_allows_plain_language_definition_but_grounds_company_details(
         ("Any simpler way?", "How do I set up VPN?", "How do I set up VPN? Any simpler way?"),
         ("What if that fails?", "What if my MFA fails?", "What if my MFA fails? What if that fails?"),
         ("What about Windows?", "How do I set up VPN?", "How do I set up VPN? What about Windows?"),
+        ("i need for macOS", "tell me how to setup vpm", "tell me how to setup vpn i need for macOS"),
         ("Where do I contact them?", "How do I set up VPN?", "How do I set up VPN? Where do I contact them?"),
     ],
 )
@@ -350,6 +351,8 @@ def test_it_direct_vpn_setup_uses_relevant_documented_steps(
         [vpn_context],
         AIMessage(
             content=(
+                "A VPN creates a protected connection to the company network.\n\n"
+                "Prerequisite: use the documented Cisco AnyConnect client.\n\n"
                 "1. Install Cisco AnyConnect from the IT Self-Service Portal.\n"
                 "2. Open it and enter vpn.company.com.\n"
                 "3. Sign in with your corporate credentials and enter your "
@@ -360,11 +363,161 @@ def test_it_direct_vpn_setup_uses_relevant_documented_steps(
 
     result = post_chat("How do I set up VPN on Windows?", agent="it")
 
-    assert "1. Install Cisco AnyConnect" in result["answer"]
+    answer = result["answer"]
+    assert answer.index("A VPN creates") < answer.index("Prerequisite:")
+    assert answer.index("Prerequisite:") < answer.index("1. Install Cisco AnyConnect")
+    assert "2. Open it and enter vpn.company.com." in answer
+    assert "Microsoft Authenticator 2FA token" in answer
     assert result["sources"][0]["document"] == "IT_Network_Guide_v2.pdf"
     assert model.messages is not None
-    assert "do not open with a definition" in str(model.messages).casefold()
+    prompt = str(model.messages).casefold()
+    assert "brief plain-language explanation" in prompt
+    assert "documented prerequisites" in prompt
+    assert "requested operating system" in prompt
     assert "vpn.company.com" in str(model.messages)
+
+
+def test_it_windows_vpn_question_followed_by_macos_uses_history_and_cites_source(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    retrieved_queries: list[str] = []
+    mac_context = RetrievedChunk(
+        document="IT_Network_Guide_v2.pdf",
+        page=None,
+        section="2",
+        score=0.625,
+        snippet=(
+            "macOS:\n"
+            "1. Install Cisco AnyConnect Secure Mobility Client from the IT "
+            "Self-Service Portal\n"
+            "2. Open AnyConnect\n"
+            "3. Enter vpn.company.com as the host\n"
+            "4. Sign in with corporate credentials (employee_id@company.com)\n"
+            "5. Enter 2FA token from Microsoft Authenticator\n"
+            "6. Once connected, you will receive a 10.x.x.x internal IP"
+        ),
+    )
+    model = mock_generation(
+        monkeypatch,
+        [mac_context],
+        AIMessage(
+            content=(
+                "A VPN creates a protected connection to the company network.\n\n"
+                "Prerequisite: use the documented Cisco AnyConnect client.\n\n"
+                "1. Install Cisco AnyConnect from the IT Self-Service Portal.\n"
+                "2. Open AnyConnect and enter vpn.company.com.\n"
+                "3. Sign in with your corporate credentials and enter the "
+                "Microsoft Authenticator 2FA token."
+            )
+        ),
+    )
+    actual_retrieve = pipeline.retrieve
+
+    def capture_retrieve(agent_id: str, query: str) -> list[RetrievedChunk]:
+        retrieved_queries.append(query)
+        assert agent_id == "it"
+        return actual_retrieve(agent_id, query)
+
+    monkeypatch.setattr(pipeline, "retrieve", capture_retrieve)
+
+    result = post_chat(
+        "i need for macOS",
+        agent="it",
+        conversation_history=[
+            {"role": "user", "content": "tell me how to setup vpm"},
+            {
+                "role": "assistant",
+                "content": "Windows VPN instructions were provided.",
+            },
+        ],
+    )
+
+    assert result["agent"] == "it"
+    answer = result["answer"]
+    assert answer.index("A VPN creates") < answer.index("Prerequisite:")
+    assert answer.index("Prerequisite:") < answer.index("1. Install Cisco AnyConnect")
+    assert "2. Open AnyConnect and enter vpn.company.com." in answer
+    assert len(retrieved_queries) == 1
+    assert "vpn" in retrieved_queries[0].casefold()
+    assert "macos" in retrieved_queries[0].casefold()
+    assert "Cisco AnyConnect" in result["answer"]
+    assert result["sources"][0]["document"] == "IT_Network_Guide_v2.pdf"
+    assert result["sources"][0]["section"] == "2"
+    assert model.invocation_count == 1
+    assert model.messages is not None
+    prompt = str(model.messages)
+    assert "macOS" in prompt
+    assert "Windows VPN instructions" in prompt
+    assert "requested operating system" in prompt
+    assert "use another platform's steps only when the source explicitly says they are the same" in prompt
+
+
+def test_conversation_history_is_request_scoped_across_authenticated_users(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from fastapi.testclient import TestClient
+    from app.api import routes
+    from app.main import app
+    from app.rag.pipeline import RagResult
+    from tests.conftest import authenticate_client
+
+    received: list[tuple[str, str, list[tuple[str, str]]]] = []
+
+    def capture_rag(
+        agent: str,
+        question: str,
+        history: list[tuple[str, str]] | None = None,
+    ) -> RagResult:
+        received.append((agent, question, history or []))
+        return RagResult(
+            answer="Grounded test response.",
+            agent=agent,
+            sources=[],
+            latency_ms=1,
+            llm_provider="test",
+        )
+
+    monkeypatch.setattr(routes, "run_rag", capture_rag)
+    requests = [
+        (
+            "employee",
+            "Any simpler way?",
+            "it",
+            [("user", "How do I set up VPN?")],
+        ),
+        (
+            "admin",
+            "Where is the reimbursement policy?",
+            "hr",
+            [("user", "How many days to submit a claim?")],
+        ),
+    ]
+
+    for role, question, agent, history in requests:
+        client = TestClient(app)
+        authenticate_client(client, role)
+        response = client.post(
+            "/api/chat",
+            json={
+                "question": question,
+                "agent": agent,
+                "conversation_history": [
+                    {"role": turn_role, "content": content}
+                    for turn_role, content in history
+                ],
+            },
+        )
+        assert response.status_code == 200
+        client.close()
+
+    assert received == [
+        ("it", "Any simpler way?", [("user", "How do I set up VPN?")]),
+        (
+            "hr",
+            "Where is the reimbursement policy?",
+            [("user", "How many days to submit a claim?")],
+        ),
+    ]
 
 
 def test_it_mfa_question_uses_documented_steps_and_escalation(
@@ -401,7 +554,7 @@ def test_it_mfa_question_uses_documented_steps_and_escalation(
     assert "re-register Microsoft Authenticator via IT Portal" in str(model.messages)
 
 
-def test_it_otp_response_preserves_full_documented_condition_and_citation(
+def test_it_otp_timeout_and_escalation_preserve_full_condition_and_citation(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     otp_source = RetrievedChunk(

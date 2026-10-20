@@ -264,12 +264,15 @@ def test_health_endpoint_responds_during_a_slow_chat_request(
     from app.api import routes
     from app.main import app
     from app.rag.pipeline import RagResult
+    from app.request_context import current_request_id
     from tests.conftest import authenticate_client
 
     chat_started = Event()
     finish_chat = Event()
+    chat_request_ids: list[str] = []
 
     def slow_rag(agent: str, question: str) -> RagResult:
+        chat_request_ids.append(current_request_id())
         chat_started.set()
         if not finish_chat.wait(timeout=3):
             raise TimeoutError("Test chat handler was not released.")
@@ -302,7 +305,9 @@ def test_health_endpoint_responds_during_a_slow_chat_request(
                 assert response.json()["status"] == "ok"
             finally:
                 finish_chat.set()
-            assert chat_future.result(timeout=2).status_code == 200
+            chat_response = chat_future.result(timeout=2)
+            assert chat_response.status_code == 200
+            assert chat_response.headers.get("X-Request-ID") == chat_request_ids[0]
 
 
 def test_startup_does_not_load_embedding_model(monkeypatch):

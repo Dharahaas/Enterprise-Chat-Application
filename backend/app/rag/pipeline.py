@@ -26,6 +26,7 @@ from app.rag.llm import (
     llm_provider_name,
 )
 from app.rag.vectorstore import get_vectorstore_for_agent
+from app.request_context import current_request_id
 
 logger = logging.getLogger(__name__)
 
@@ -124,7 +125,10 @@ def _is_follow_up(question: str) -> bool:
         re.search(
             r"\b(?:any\s+(?:simpler|easier)|simpler|easier|what\s+if|what\s+about|"
             r"where\s+(?:do|can)\s+i|how\s+about|that\s+(?:fails?|doesn't|does\s+not)|"
-            r"it\s+(?:fails?|doesn't|does\s+not)|contact\s+them|try\s+next)\b",
+            r"it\s+(?:fails?|doesn't|does\s+not)|contact\s+them|try\s+next)\b|"
+            r"\b(?:i\s+)?(?:need|want|prefer)\s+(?:instructions?\s+)?"
+            r"(?:for\s+)?(?:macos|windows|linux)\b|"
+            r"\bfor\s+(?:macos|windows|linux)\b",
             normalized,
         )
         or re.fullmatch(r"(?:windows|mac(?:os)?|linux)[?.!]*", normalized)
@@ -141,6 +145,7 @@ def _retrieval_topic_question(
         (content for role, content in reversed(conversation_history) if role == "user"),
         "",
     )
+    prior_question = normalize_query(prior_question)
     return f"{prior_question} {question}".strip() if prior_question else question
 
 
@@ -290,8 +295,9 @@ def retrieve(agent_id: str, question: str) -> list[RetrievedChunk]:
         vectorstore = get_vectorstore_for_agent(agent_id, embeddings)
         vectorstore_open_ms = int((time.perf_counter() - vectorstore_start) * 1000)
         logger.info(
-            "RAG resources ready agent=%s embedding_client_ms=%d "
+            "RAG resources ready request_id=%s agent=%s embedding_client_ms=%d "
             "vectorstore_open_ms=%d",
+            current_request_id(),
             agent_id,
             embedding_client_ms,
             vectorstore_open_ms,
@@ -314,8 +320,9 @@ def retrieve(agent_id: str, question: str) -> list[RetrievedChunk]:
                 )
             query_elapsed_ms = (time.perf_counter() - query_start) * 1000
             logger.info(
-                "Retrieval query complete agent=%s query_index=%d "
+                "Retrieval query complete request_id=%s agent=%s query_index=%d "
                 "embedding_ms=%d chroma_query_ms=%d query_total_ms=%d",
+                current_request_id(),
                 agent_id,
                 query_index,
                 round(embedding_timer.elapsed_ms),
@@ -355,8 +362,9 @@ def retrieve(agent_id: str, question: str) -> list[RetrievedChunk]:
                 )
             query_elapsed_ms = (time.perf_counter() - query_start) * 1000
             logger.info(
-                "Retrieval query complete agent=%s query_index=%d "
+                "Retrieval query complete request_id=%s agent=%s query_index=%d "
                 "embedding_ms=%d chroma_query_ms=%d query_total_ms=%d fallback=true",
+                current_request_id(),
                 agent_id,
                 len(queries) + 1,
                 round(embedding_timer.elapsed_ms),
@@ -401,9 +409,10 @@ def retrieve(agent_id: str, question: str) -> list[RetrievedChunk]:
             for chunk in ranked_candidates
         )
         logger.info(
-            "Retrieval candidates agent=%s collection=%s queries=%d "
+            "Retrieval candidates request_id=%s agent=%s collection=%s queries=%d "
             "candidate_count=%d kept_count=%d retrieval_ms=%d metric=%s minimum_score=%.2f "
             "sources_scores=%s",
+            current_request_id(),
             agent_id,
             collection,
             len(queries),
@@ -576,7 +585,8 @@ def run_rag(
         conversation_history,
     )
     logger.info(
-        "RAG query preparation agent=%s rewrite_ms=%d follow_up=%s",
+        "RAG query preparation request_id=%s agent=%s rewrite_ms=%d follow_up=%s",
+        current_request_id(),
         agent_id,
         int((time.perf_counter() - rewrite_start) * 1000),
         retrieval_question != normalized_question,
@@ -603,8 +613,9 @@ def run_rag(
 
     retrieval_elapsed_ms = int((time.perf_counter() - retrieval_start) * 1000)
     logger.info(
-        "RAG retrieval complete stage=retrieval agent=%s elapsed_ms=%d "
+        "RAG retrieval complete request_id=%s stage=retrieval agent=%s elapsed_ms=%d "
         "chunks_found=%d chunks_used=%d",
+        current_request_id(),
         agent_id,
         retrieval_elapsed_ms,
         len(chunks),
@@ -638,7 +649,9 @@ def run_rag(
         )
         context_elapsed_ms = int((time.perf_counter() - context_start) * 1000)
         logger.info(
-            "RAG context preparation agent=%s elapsed_ms=%d chunks=%d context_chars=%d",
+            "RAG context preparation request_id=%s agent=%s elapsed_ms=%d "
+            "chunks=%d context_chars=%d",
+            current_request_id(),
             agent_id,
             context_elapsed_ms,
             len(top_chunks),
@@ -656,8 +669,9 @@ def run_rag(
                 (time.perf_counter() - client_start) * 1000
             )
             logger.info(
-                "Answer generation invoking stage=invoke agent=%s provider=%s "
+                "Answer generation invoking request_id=%s stage=invoke agent=%s provider=%s "
                 "model=%s chunks=%d llm_client_init_ms=%d llm_call_count=1",
+                current_request_id(),
                 agent_id,
                 llm_provider_name(),
                 llm_model_name(),
@@ -679,8 +693,9 @@ def run_rag(
             generation_span.metadata["llm_provider"] = llm_provider_name()
             generation_span.metadata["answer_chars"] = len(answer_text)
         logger.info(
-            "RAG generation complete stage=generation agent=%s provider=%s "
+            "RAG generation complete request_id=%s stage=generation agent=%s provider=%s "
             "model=%s elapsed_ms=%d provider_latency_ms=%d",
+            current_request_id(),
             agent_id,
             llm_provider_name(),
             llm_model_name(),
@@ -726,9 +741,10 @@ def run_rag(
         else:
             category, status, code, provider_message = diagnose_llm_error(exc)
         logger.warning(
-            "Answer generation failed stage=%s agent=%s provider=%s model=%s "
+            "Answer generation failed request_id=%s stage=%s agent=%s provider=%s model=%s "
             "category=%s http_status=%s provider_code=%s error_type=%s "
             "provider_message=%s",
+            current_request_id(),
             "parse" if isinstance(exc, MalformedModelResponseError) else "invoke",
             agent_id,
             llm_provider_name(),

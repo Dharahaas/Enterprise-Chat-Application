@@ -91,11 +91,19 @@ const API = (() => {
     if (!skipCsrf && !['GET', 'HEAD', 'OPTIONS'].includes(method) && csrfToken) {
       headers.set('X-CSRF-Token', csrfToken);
     }
+    const requestStartedAt = performance.now();
     const res = await fetch(`${base}${path}`, {
       ...fetchOptions,
       headers,
       credentials: 'include',
     });
+    if (path === '/api/chat') {
+      console.info('[EKA] Chat HTTP response', {
+        requestId: res.headers.get('X-Request-ID'),
+        status: res.status,
+        networkWaitMs: Math.round(performance.now() - requestStartedAt),
+      });
+    }
     if (!res.ok) {
       let detail = '';
       try {

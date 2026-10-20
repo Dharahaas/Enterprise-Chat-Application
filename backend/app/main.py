@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import logging
 import time
+import uuid
 from contextlib import asynccontextmanager
 from pathlib import Path, PurePosixPath
 from urllib.parse import unquote
@@ -21,6 +22,7 @@ from app.api.auth_routes import router as auth_router
 from app.api.routes import router as api_router
 from app.auth import SESSION_COOKIE, get_session_user, initialize_auth_store
 from app.config import settings
+from app.request_context import reset_request_id, set_request_id
 
 
 logging.basicConfig(
@@ -134,15 +136,22 @@ async def block_private_frontend_paths(request: Request, call_next):
 async def log_chat_request_timing(request: Request, call_next):
     if request.url.path != "/api/chat":
         return await call_next(request)
+    correlation_id = uuid.uuid4().hex[:12]
+    token = set_request_id(correlation_id)
     start = time.perf_counter()
-    response = await call_next(request)
-    logger.info(
-        "HTTP request complete method=POST path=/api/chat status_code=%d "
-        "http_total_ms=%d",
-        response.status_code,
-        int((time.perf_counter() - start) * 1000),
-    )
-    return response
+    try:
+        response = await call_next(request)
+        response.headers["X-Request-ID"] = correlation_id
+        logger.info(
+            "HTTP request complete request_id=%s method=POST path=/api/chat "
+            "status_code=%d http_total_ms=%d",
+            correlation_id,
+            response.status_code,
+            int((time.perf_counter() - start) * 1000),
+        )
+        return response
+    finally:
+        reset_request_id(token)
 
 
 # Mount API routes under /api

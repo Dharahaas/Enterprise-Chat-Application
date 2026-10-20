@@ -62,6 +62,7 @@
     const loginError = document.getElementById('loginError');
     const loginDemoNote = document.getElementById('loginDemoNote');
     const roleOptions = [...document.querySelectorAll('input[name="role"]')];
+    let loginOptions = { demo_login_enabled: false, demo_admin_login_enabled: false };
 
     const selectedRole = () => document.querySelector('input[name="role"]:checked').value;
     const updateRoleLabel = () => {
@@ -71,6 +72,7 @@
     roleOptions.forEach(option => option.addEventListener('change', updateRoleLabel));
 
     API.authOptions().then(options => {
+      loginOptions = options;
       if (options.demo_login_enabled) {
         loginDemoNote.textContent = 'Evaluation demo access is not production authentication. Do not enter sensitive information.';
         loginDemoNote.hidden = false;
@@ -101,7 +103,15 @@
         );
         window.location.replace('portal.html');
       } catch (error) {
-        loginError.textContent = error.message || 'Sign-in failed. Please try again.';
+        if (
+          selectedRole() === 'admin' &&
+          loginOptions.demo_login_enabled &&
+          !loginOptions.demo_admin_login_enabled
+        ) {
+          loginError.textContent = 'Dummy administrator sign-in is disabled for this public demo. Use a provisioned administrator account, or choose Employee for demo access.';
+        } else {
+          loginError.textContent = error.message || 'Sign-in failed. Please try again.';
+        }
       } finally {
         loginButton.disabled = false;
         updateRoleLabel();

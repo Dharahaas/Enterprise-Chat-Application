@@ -14,6 +14,7 @@ from chromadb.utils.embedding_functions import ONNXMiniLM_L6_V2
 from langchain_core.embeddings import Embeddings
 
 from app.config import settings
+from app.request_context import current_request_id
 
 logger = logging.getLogger(__name__)
 
@@ -57,7 +58,8 @@ class ChromaONNXEmbeddings(Embeddings):
         if timer is not None:
             timer.elapsed_ms += elapsed_ms
         logger.info(
-            "Embedding complete provider=chroma_onnx items=%d elapsed_ms=%d",
+            "Embedding complete request_id=%s provider=chroma_onnx items=%d elapsed_ms=%d",
+            current_request_id(),
             len(texts),
             round(elapsed_ms),
         )
@@ -81,7 +83,8 @@ def get_embeddings() -> Embeddings:
     start = time.perf_counter()
     embeddings = ChromaONNXEmbeddings()
     logger.info(
-        "Embedding client initialized provider=chroma_onnx elapsed_ms=%d",
+        "Embedding client initialized request_id=%s provider=chroma_onnx elapsed_ms=%d",
+        current_request_id(),
         int((time.perf_counter() - start) * 1000),
     )
     return embeddings

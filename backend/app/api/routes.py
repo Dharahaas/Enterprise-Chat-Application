@@ -34,6 +34,7 @@ from app.models import (
 )
 from app.rag.pipeline import RagResult, run_rag
 from app.rag.vectorstore import count_chunks, delete_document, list_documents_in_collection
+from app.request_context import current_request_id
 
 
 router = APIRouter(prefix="/api")
@@ -91,8 +92,9 @@ def chat(req: ChatRequest) -> ChatResponse:
             result = run_rag(resolved_agent_id, question)
     agent_id = result.agent
     logger.info(
-        "Chat request complete selected_agent=%s resolved_agent=%s "
+        "Chat request complete request_id=%s selected_agent=%s resolved_agent=%s "
         "responding_agent=%s history_messages=%d request_ms=%d rag_ms=%d",
+        current_request_id(),
         req.agent or "auto",
         resolved_agent_id,
         result.agent,

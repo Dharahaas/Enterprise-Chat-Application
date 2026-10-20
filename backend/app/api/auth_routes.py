@@ -33,6 +33,7 @@ class LoginRequest(BaseModel):
 
 class AuthOptionsResponse(BaseModel):
     demo_login_enabled: bool
+    demo_admin_login_enabled: bool
 
 
 class UserResponse(BaseModel):
@@ -69,7 +70,11 @@ def _demo_login_enabled_for(request: Request) -> bool:
 
 @router.get("/options", response_model=AuthOptionsResponse)
 async def auth_options(request: Request) -> AuthOptionsResponse:
-    return AuthOptionsResponse(demo_login_enabled=_demo_login_enabled_for(request))
+    demo_login_enabled = _demo_login_enabled_for(request)
+    return AuthOptionsResponse(
+        demo_login_enabled=demo_login_enabled,
+        demo_admin_login_enabled=demo_login_enabled and not settings.demo_auth_public,
+    )
 
 
 @router.post("/login", response_model=LoginResponse)
