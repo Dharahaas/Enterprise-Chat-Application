@@ -204,10 +204,8 @@ async def block_private_frontend_paths(request: Request, call_next):
                 user.role != "admin" or is_demo_admin(user)
             ):
                 return RedirectResponse("/app/portal.html?access=denied", status_code=303)
-            if page == "demo-admin.html" and (
-                user.role != "admin" or not is_demo_admin(user)
-            ):
-                return RedirectResponse("/app/portal.html?access=denied", status_code=303)
+            if page == "demo-admin.html":
+                return RedirectResponse("/app/portal.html", status_code=303)
     return await call_next(request)
 
 

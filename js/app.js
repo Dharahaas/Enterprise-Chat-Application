@@ -39,8 +39,10 @@ const API = (() => {
   // 4. Same-machine backend fallback for local frontend development
   const override = new URLSearchParams(location.search).get('api');
   const isLoopbackHost = location.hostname === 'localhost' || location.hostname === '127.0.0.1';
-  const isStaticLocalFrontend = isLoopbackHost && location.port === '5500';
-  const localBackend = isLoopbackHost ? `http://${location.hostname}:8000` : null;
+  const isStaticLocalFrontend = isLoopbackHost && ['5500', '5501'].includes(location.port);
+  const localBackend = isLoopbackHost
+    ? `http://${location.hostname}:${location.port === '5501' ? '8766' : '8000'}`
+    : null;
   const candidates = [...new Set([
     override,
     ...(isStaticLocalFrontend ? [] : [location.origin]),  // Prefer the API proxied by the current origin.
@@ -283,6 +285,10 @@ function isDemoAdminUser(user) {
   return user?.role === 'admin' && user.username === 'demo-admin@demo.invalid';
 }
 
+function homePageForUser(user) {
+  return 'portal.html';
+}
+
 async function logout() {
   try {
     await API.logout();
@@ -299,14 +305,12 @@ async function logout() {
 /* ---------- Sidebar render ---------- */
 function renderSidebar(activePage) {
   const user = appUser || {};
+  const realAdmin = user.role === 'admin' && !isDemoAdminUser(user);
   const selectedAgent = new URLSearchParams(location.search).get('agent') || 'hr';
   const navItems = [
     { id: "portal", label: "Employee portal", href: "portal.html", icon: chartIcon() },
     { id: "chat", label: "Chat", href: "chat.html", icon: chatIcon() },
-    ...(isDemoAdminUser(user) ? [
-      { id: "demo-admin", label: "Demo admin", href: "demo-admin.html", icon: chartIcon() },
-    ] : []),
-    ...(user.role === 'admin' && !isDemoAdminUser(user) ? [
+    ...(realAdmin ? [
       { id: "documents", label: "Documents", href: "documents.html", icon: docIcon() },
       { id: "analytics", label: "Analytics", href: "analytics.html", icon: chartIcon() },
     ] : []),

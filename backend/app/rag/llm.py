@@ -2,14 +2,19 @@
 
 from __future__ import annotations
 
+import hashlib
 import logging
 import os
 import re
+from threading import Lock
 from typing import Any
 
 from app.config import is_llm_enabled, settings
 
 logger = logging.getLogger(__name__)
+_client_lock = Lock()
+_client_fingerprint: tuple[Any, ...] | None = None
+_client_instance: Any = None
 
 LLM_NOT_CONFIGURED_MESSAGE = (
     "A language model is not configured for this assistant yet. To generate "
@@ -94,8 +99,48 @@ def diagnose_llm_error(
     return category, status, error_code or None, message
 
 
+def _cached_chat_model(
+    provider: str,
+    model: str,
+    api_key: str,
+    temperature: float,
+    max_tokens: int,
+    client_factory: Any,
+) -> Any:
+    """Reuse one configured client and its HTTP connection pool per process."""
+    global _client_fingerprint, _client_instance
+    fingerprint = (
+        provider,
+        model,
+        hashlib.sha256(api_key.encode("utf-8")).digest(),
+        temperature,
+        max_tokens,
+        id(client_factory),
+    )
+    with _client_lock:
+        if fingerprint == _client_fingerprint:
+            return _client_instance
+
+        kwargs: dict[str, Any] = {
+            "model": model,
+            "api_key": api_key,
+            "temperature": temperature,
+            "max_tokens": max_tokens,
+            "timeout": 60 if provider == "gemini" else 30,
+            "max_retries": 1,
+        }
+        if provider == "gemini":
+            kwargs["base_url"] = (
+                "https://generativelanguage.googleapis.com/v1beta/openai/"
+            )
+        client = client_factory(**kwargs)
+        _client_instance = client
+        _client_fingerprint = fingerprint
+        return client
+
+
 def get_llm() -> Any:
-    """Create the configured chat model; never substitute a template answer."""
+    """Return the configured reusable chat client; never substitute a template answer."""
     if not is_llm_enabled():
         raise LLMNotConfiguredError(LLM_NOT_CONFIGURED_MESSAGE)
 
@@ -109,26 +154,18 @@ def get_llm() -> Any:
             ).strip()
             if not model:
                 raise ValueError("GEMINI_MODEL must not be empty")
-            return ChatOpenAI(
-                model=model,
-                api_key=api_key,
-                base_url="https://generativelanguage.googleapis.com/v1beta/openai/",
-                temperature=settings.llm_temperature,
-                max_tokens=settings.llm_max_tokens,
-                timeout=60,
-                max_retries=1,
-            )
-
-        api_key = settings.openai_api_key.strip() or os.getenv(
-            "OPENAI_API_KEY", ""
-        ).strip()
-        return ChatOpenAI(
-            model=settings.openai_model,
-            api_key=api_key,
-            temperature=settings.llm_temperature,
-            max_tokens=settings.llm_max_tokens,
-            timeout=30,
-            max_retries=1,
+        else:
+            model = settings.openai_model.strip()
+            api_key = settings.openai_api_key.strip() or os.getenv(
+                "OPENAI_API_KEY", ""
+            ).strip()
+        return _cached_chat_model(
+            settings.llm_provider,
+            model,
+            api_key,
+            settings.llm_temperature,
+            settings.llm_max_tokens,
+            ChatOpenAI,
         )
     except ValueError:
         raise

@@ -1227,6 +1227,15 @@ def test_normal_prose_containing_system_label_is_not_rejected() -> None:
     assert pipeline._extract_answer(AIMessage(content=answer)) == answer
 
 
+def test_inline_document_filename_is_sanitized_without_losing_answer() -> None:
+    answer = "Report suspicious messages as described in InfoSec_Policy_v4.pdf."
+
+    sanitized = pipeline._extract_answer(AIMessage(content=answer))
+
+    assert sanitized == "Report suspicious messages as described in the source document."
+    assert "InfoSec_Policy_v4.pdf" not in sanitized
+
+
 def test_answer_and_citations_are_returned_in_separate_schema_fields(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1253,6 +1262,72 @@ def test_answer_and_citations_are_returned_in_separate_schema_fields(
     assert "Leave_Policy.docx" not in result["answer"]
     assert result["sources"][0]["document"] == "Leave_Policy.docx"
     assert result["sources"][0]["section"] == "3.1"
+
+
+@pytest.mark.parametrize("agent", ["hr", "it", "policy"])
+def test_agent_prompts_ask_for_direct_useful_formatting_without_forced_templates(
+    agent: str,
+) -> None:
+    messages = pipeline.build_prompt(agent, "How can I proceed?", "Confirmed passage.")
+    system_prompt = messages[0].content
+
+    assert "Answer the user's actual question directly" in system_prompt
+    assert "keep greetings and simple questions brief" in system_prompt
+    assert "Use short Markdown headings, bullets, or numbered steps only when" in system_prompt
+    assert "avoid stock introductions, repeated conclusions, and filler" in system_prompt.casefold()
+    assert "source labels, filenames" in system_prompt
+    assert "source references are returned separately" in system_prompt
+
+
+def test_structured_it_answer_keeps_numbered_steps_and_separate_citation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    chunk = RetrievedChunk(
+        document="IT_Network_Guide.pdf",
+        page=4,
+        section="2.1",
+        score=0.82,
+        snippet="Open the approved VPN client, then select Connect.",
+    )
+    answer = "VPN setup\n\n1. Open the approved VPN client.\n2. Select Connect."
+    mock_generation(monkeypatch, [chunk], AIMessage(content=answer))
+
+    result = post_chat("How do I connect to VPN?", agent="it")
+
+    assert result["answer"] == answer
+    assert result["sources"][0]["document"] == "IT_Network_Guide.pdf"
+    assert result["sources"][0]["page"] == 4
+    assert "IT_Network_Guide.pdf" not in result["answer"]
+
+
+def test_reusable_model_client_tracks_configuration_without_caching_raw_key(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import langchain_openai
+
+    created: list[object] = []
+
+    def fake_chat_openai(**kwargs: Any) -> object:
+        client = object()
+        created.append(client)
+        return client
+
+    monkeypatch.setattr(llm.settings, "llm_provider", "gemini")
+    monkeypatch.setattr(llm.settings, "gemini_model", "gemini-cache-test")
+    monkeypatch.setattr(llm.settings, "gemini_api_key", "cache-test-secret")
+    monkeypatch.setattr(llm, "is_llm_enabled", lambda: True)
+    monkeypatch.setattr(langchain_openai, "ChatOpenAI", fake_chat_openai)
+
+    first = llm.get_llm()
+    second = llm.get_llm()
+    assert first is second
+    assert len(created) == 1
+    assert b"cache-test-secret" not in repr(llm._client_fingerprint).encode("utf-8")
+
+    monkeypatch.setattr(llm.settings, "gemini_model", "gemini-cache-test-updated")
+    third = llm.get_llm()
+    assert third is not first
+    assert len(created) == 2
 
 
 def test_retrieval_distance_is_converted_using_squared_l2_geometry() -> None:

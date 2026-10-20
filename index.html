@@ -90,7 +90,7 @@
     });
 
     API.session().then(user => {
-      window.location.replace(user.username === 'demo-admin@demo.invalid' ? 'demo-admin.html' : 'portal.html');
+      window.location.replace(homePageForUser(user));
     }).catch(error => {
       const params = new URLSearchParams(location.search);
       if (params.get('error') === 'unavailable' || error.status !== 401) {
@@ -109,7 +109,7 @@
           document.getElementById('password').value,
           selectedRole(),
         );
-        window.location.replace(user.username === 'demo-admin@demo.invalid' ? 'demo-admin.html' : 'portal.html');
+        window.location.replace(homePageForUser(user));
       } catch (error) {
         loginError.textContent = error.message || 'Sign-in failed. Please try again.';
       } finally {

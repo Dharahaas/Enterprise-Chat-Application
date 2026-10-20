@@ -186,9 +186,15 @@ def test_demo_login_uses_selected_role_and_keeps_admin_apis_protected(monkeypatc
     assert employee.get("/api/documents").status_code == 403
 
     admin = TestClient(app)
-    admin_login = admin.post(
+    invalid_admin_login = admin.post(
         "/api/auth/login",
         json={"username": "another-dummy-name", "password": "any-value", "role": "admin"},
+    )
+    assert invalid_admin_login.status_code == 401
+
+    admin_login = admin.post(
+        "/api/auth/login",
+        json={"role": "admin"},
     )
     assert admin_login.status_code == 200
     assert admin_login.json()["user"] == {
@@ -253,10 +259,14 @@ def test_public_demo_admin_is_limited_and_real_admin_remains_secure(monkeypatch)
     )
     assert employee.status_code == 200
     assert employee.json()["user"]["role"] == "employee"
-    assert client.get(
-        "/api/documents",
-        headers={"Cookie": f"eka_session={employee.cookies['eka_session']}"},
-    ).status_code == 403
+    demo_employee_cookie = f"eka_session={employee.cookies['eka_session']}"
+    demo_employee_headers = {"Cookie": demo_employee_cookie}
+    for path in ("/api/documents", "/api/analytics"):
+        assert client.get(path, headers=demo_employee_headers).status_code == 403
+    for path in ("/app/documents.html", "/app/analytics.html"):
+        denied_page = client.get(path, headers=demo_employee_headers, follow_redirects=False)
+        assert denied_page.status_code == 303
+        assert denied_page.headers["location"] == "/app/portal.html?access=denied"
 
     invalid_real_admin = client.post(
         "/api/auth/login",
@@ -280,7 +290,12 @@ def test_public_demo_admin_is_limited_and_real_admin_remains_secure(monkeypatch)
     }
     demo_admin.headers["Cookie"] = f"eka_session={demo_admin.cookies['eka_session']}"
     demo_admin.headers["X-CSRF-Token"] = admin.json()["csrf_token"]
-    assert demo_admin.get("/app/demo-admin.html").status_code == 200
+    demo_portal = demo_admin.get("/app/portal.html", follow_redirects=False)
+    assert demo_portal.status_code == 200
+    assert b"portal-announcement-grid" in demo_portal.content
+    demo_admin_page = demo_admin.get("/app/demo-admin.html", follow_redirects=False)
+    assert demo_admin_page.status_code == 303
+    assert demo_admin_page.headers["location"] == "/app/portal.html"
     assert demo_admin.get("/app/documents.html", follow_redirects=False).status_code == 303
     assert demo_admin.get("/app/analytics.html", follow_redirects=False).status_code == 303
     for path in (
@@ -301,10 +316,14 @@ def test_public_demo_admin_is_limited_and_real_admin_remains_secure(monkeypatch)
 
     employee_cannot_open_demo_admin = TestClient(app)
     authenticate_client(employee_cannot_open_demo_admin, "employee")
+    employee_cannot_open_demo_admin.headers["Cookie"] = (
+        f"eka_session={employee_cannot_open_demo_admin.cookies['eka_session']}"
+    )
     denied_demo_page = employee_cannot_open_demo_admin.get(
         "/app/demo-admin.html", follow_redirects=False
     )
     assert denied_demo_page.status_code == 303
+    assert denied_demo_page.headers["location"] == "/app/portal.html"
 
     provisioned_admin = client.post(
         "/api/auth/login",
@@ -392,13 +411,20 @@ def test_static_pages_redirect_and_private_files_are_not_served():
     assert client.get("/app/backend/app/auth.py").status_code == 404
 
     authenticate_client(client, "employee")
+    employee_portal = client.get("/app/portal.html", follow_redirects=False)
+    assert employee_portal.status_code == 200
     denied = client.get("/app/documents.html", follow_redirects=False)
     assert denied.status_code == 303
     assert denied.headers["location"] == "/app/portal.html?access=denied"
 
     admin_client = TestClient(app)
     authenticate_client(admin_client)
+    admin_portal = admin_client.get("/app/portal.html", follow_redirects=False)
+    assert admin_portal.status_code == 200
+    assert "portal-announcement-grid" in admin_portal.text
+    assert admin_client.get("/app/chat.html").status_code == 200
     assert admin_client.get("/app/documents.html").status_code == 200
+    assert admin_client.get("/app/analytics.html").status_code == 200
 
 
 def test_admin_can_access_existing_admin_routes(monkeypatch):

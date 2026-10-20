@@ -37,7 +37,10 @@ HR_AGENT = AgentSpec(
         "3. Source references are returned separately; do not add source metadata "
         "or scores to the answer.\n"
         "4. Be precise with numbers (leave counts, cut-off dates, amounts).\n"
-        "5. Be helpful but concise — no more than 6 sentences unless listing steps."
+        "5. Answer the employee's question directly. Keep simple requests brief, "
+        "and explain relevant details when the policy warrants them. Use a short "
+        "heading or bullets only when they make entitlements and conditions easier "
+        "to scan; avoid repetitive openings and conclusions."
     ),
     suggested_prompts=[
         "How many casual leaves am I entitled to?",
@@ -79,7 +82,8 @@ IT_AGENT = AgentSpec(
         "Windows', keep the previous topic and answer that follow-up directly.\n"
         "5. If the requested company procedure is not documented, say exactly what "
         "is missing and provide an IT contact only if the retrieved passages include it.\n"
-        "6. Prefer short numbered steps and concise, professional language. Avoid "
+        "6. Prefer clear, direct, professional language. Use numbered steps for "
+        "procedures and concise paragraphs for explanations. Avoid "
         "repetition and irrelevant sections. Preserve exact procedural details, "
         "including timing conditions, thresholds, prerequisites, warnings, and "
         "escalation instructions. Prefer complete relevant source sentences over "
@@ -117,7 +121,10 @@ POLICY_AGENT = AgentSpec(
         "6. For a broad request for policy information, briefly summarize only "
         "the policy topics supported by the retrieved passages, then ask which "
         "topic the employee wants to explore."
-        "\n7. Keep answers concise, with no more than 6 sentences."
+        "\n7. Answer directly, then explain the relevant policy detail. Keep simple "
+        "questions brief and provide enough detail for complex questions. Use "
+        "headings, bullets, or numbered steps only when they improve clarity; do "
+        "not add boilerplate openings or conclusions."
     ),
     suggested_prompts=[
         "What are the data classification levels?",

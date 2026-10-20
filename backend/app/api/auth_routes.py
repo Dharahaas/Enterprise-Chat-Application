@@ -93,7 +93,6 @@ async def login(
     if user is None and payload.role and _demo_login_enabled_for(request):
         can_use_demo_identity = (
             payload.role == "employee"
-            or not settings.demo_auth_public
             or (not payload.username and not payload.password)
         )
         if can_use_demo_identity:
