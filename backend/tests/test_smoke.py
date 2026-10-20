@@ -198,10 +198,14 @@ def test_documents_endpoint():
     assert data["total"] >= 0
 
 
-def test_analytics_endpoint():
+def test_analytics_endpoint(monkeypatch):
     from fastapi.testclient import TestClient
+    from collections import deque
+    from app.api import routes
     from app.main import app
 
+    monkeypatch.setattr(routes, "_QUERY_LOG", deque(maxlen=1000))
+    monkeypatch.setattr(routes, "_LAST_EVAL_RESULT", None)
     client = TestClient(app)
     from tests.conftest import authenticate_client
     authenticate_client(client)
@@ -211,6 +215,56 @@ def test_analytics_endpoint():
     assert "accuracy" in data
     assert "queries_by_agent" in data
     assert "ragas_metrics" in data
+    assert data["queries_this_week"] == 0
+    assert data["unique_users"] is None
+    assert data["p50_latency_ms"] is None
+    assert data["p95_latency_ms"] is None
+    assert data["accuracy"] is None
+    assert data["retrieval_recall_at_5"] is None
+    assert data["ragas_metrics"] == {}
+    assert isinstance(routes._QUERY_LOG, deque)
+    assert routes._QUERY_LOG.maxlen == 1000
+
+
+def test_analytics_uses_recent_recorded_requests_only(monkeypatch):
+    from collections import deque
+    from datetime import datetime, timedelta, timezone
+
+    from fastapi.testclient import TestClient
+    from app.api import routes
+    from app.main import app
+    from tests.conftest import authenticate_client
+
+    now = datetime.now(timezone.utc)
+    monkeypatch.setattr(
+        routes,
+        "_QUERY_LOG",
+        deque([
+            {
+                "agent": "it",
+                "latency_ms": 240,
+                "timestamp": now.isoformat(),
+            },
+            {
+                "agent": "hr",
+                "latency_ms": 900,
+                "timestamp": (now - timedelta(days=9)).isoformat(),
+            },
+        ], maxlen=1000),
+    )
+    monkeypatch.setattr(routes, "_LAST_EVAL_RESULT", None)
+    client = TestClient(app)
+    authenticate_client(client)
+
+    response = client.get("/api/analytics")
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["queries_this_week"] == 1
+    assert data["queries_by_agent"]["it"] == 1
+    assert data["queries_by_agent"]["hr"] == 0
+    assert data["p50_latency_ms"] == 240
+    assert data["p95_latency_ms"] == 240
 
 
 def test_health_endpoint():

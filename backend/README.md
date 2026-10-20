@@ -37,9 +37,14 @@ installation:
 ```
 
 The tool prompts for the password twice. User passwords are stored as PBKDF2
-hashes. Existing bootstrap users are not reset on server restart. Provision
-employee accounts through this administrator-controlled tool; there is no
-public self-registration endpoint.
+hashes. At startup, both bootstrap variables must be set together, and the
+password must contain at least 12 characters. An existing account is never
+changed: startup verifies that the normalized username is an active admin and
+that its stored password matches the configured password. A mismatch is
+reported without resetting credentials. Public demo identities remain separate
+and cannot access administrator endpoints. Provision employee accounts through
+this administrator-controlled tool; there is no public self-registration
+endpoint.
 
 Create a Gemini API key at <https://aistudio.google.com/apikey>, then edit
 `backend/.env` for local development:

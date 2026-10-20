@@ -43,6 +43,133 @@ def test_login_roles_cookie_and_invalid_credentials():
     assert "test-employee-password-123" not in stored_hash
 
 
+def test_admin_settings_are_read_from_environment_without_repr_exposure(monkeypatch):
+    from app.config import Settings
+
+    monkeypatch.setenv("ADMIN_USERNAME", "Runtime.Admin@example.test")
+    monkeypatch.setenv("ADMIN_PASSWORD", "runtime-admin-password-123")
+    config = Settings(_env_file=None)
+
+    assert config.admin_username == "Runtime.Admin@example.test"
+    assert config.admin_password == "runtime-admin-password-123"
+    assert "runtime-admin-password-123" not in repr(config)
+
+
+def test_startup_bootstraps_configured_real_admin_and_keeps_existing_password(
+    monkeypatch,
+    tmp_path,
+):
+    import app.auth as auth
+
+    monkeypatch.setattr(settings, "auth_database_path", str(tmp_path / "auth.sqlite3"))
+    monkeypatch.setattr(settings, "admin_username", "  Bootstrap.Admin@example.test ")
+    monkeypatch.setattr(settings, "admin_password", "bootstrap-admin-password-123")
+
+    auth.initialize_auth_store()
+    first_login = auth.authenticate("bootstrap.admin@example.test", "bootstrap-admin-password-123")
+    assert first_login is not None
+    assert first_login.role == "admin"
+    with sqlite3.connect(settings.auth_database_path) as connection:
+        first_hash = connection.execute(
+            "SELECT password_hash FROM users WHERE username = ?",
+            ("bootstrap.admin@example.test",),
+        ).fetchone()[0]
+
+    auth.initialize_auth_store()
+    with sqlite3.connect(settings.auth_database_path) as connection:
+        second_hash = connection.execute(
+            "SELECT password_hash FROM users WHERE username = ?",
+            ("bootstrap.admin@example.test",),
+        ).fetchone()[0]
+    assert second_hash == first_hash
+
+
+def test_admin_bootstrap_does_not_reset_existing_password(monkeypatch, tmp_path):
+    import app.auth as auth
+
+    monkeypatch.setattr(settings, "auth_database_path", str(tmp_path / "auth.sqlite3"))
+    monkeypatch.setattr(settings, "admin_username", "")
+    monkeypatch.setattr(settings, "admin_password", "")
+    auth.initialize_auth_store()
+    auth.create_user("existing.admin@example.test", "saved-admin-password-123", "admin")
+    monkeypatch.setattr(settings, "admin_username", "existing.admin@example.test")
+    monkeypatch.setattr(settings, "admin_password", "current-admin-password-123")
+    with sqlite3.connect(settings.auth_database_path) as connection:
+        original_hash = connection.execute(
+            "SELECT password_hash FROM users WHERE username = ?",
+            ("existing.admin@example.test",),
+        ).fetchone()[0]
+
+    with pytest.raises(RuntimeError, match="different password"):
+        auth.initialize_auth_store()
+
+    with sqlite3.connect(settings.auth_database_path) as connection:
+        unchanged_hash = connection.execute(
+            "SELECT password_hash FROM users WHERE username = ?",
+            ("existing.admin@example.test",),
+        ).fetchone()[0]
+    assert unchanged_hash == original_hash
+    assert auth.authenticate("existing.admin@example.test", "saved-admin-password-123")
+    assert auth.authenticate("existing.admin@example.test", "current-admin-password-123") is None
+
+
+def test_admin_bootstrap_rejects_username_collision_and_invalid_configuration(
+    monkeypatch,
+    tmp_path,
+):
+    import app.auth as auth
+
+    monkeypatch.setattr(settings, "auth_database_path", str(tmp_path / "auth.sqlite3"))
+    monkeypatch.setattr(settings, "admin_username", "")
+    monkeypatch.setattr(settings, "admin_password", "")
+    auth.initialize_auth_store()
+    auth.create_user("existing.employee@example.test", "employee-password-123", "employee")
+    monkeypatch.setattr(settings, "admin_username", "existing.employee@example.test")
+    monkeypatch.setattr(settings, "admin_password", "bootstrap-admin-password-123")
+
+    with pytest.raises(RuntimeError, match="non-administrator"):
+        auth.initialize_auth_store()
+    assert auth.authenticate("existing.employee@example.test", "employee-password-123").role == "employee"
+
+    monkeypatch.setattr(settings, "admin_username", "")
+    with pytest.raises(RuntimeError, match="both be configured"):
+        auth.initialize_auth_store()
+
+    monkeypatch.setattr(settings, "admin_username", "new.admin@example.test")
+    monkeypatch.setattr(settings, "admin_password", "too-short")
+    with pytest.raises(RuntimeError, match="at least 12 characters"):
+        auth.initialize_auth_store()
+
+
+def test_invalid_optional_admin_bootstrap_does_not_block_public_demo(
+    monkeypatch,
+    tmp_path,
+):
+    monkeypatch.setattr(settings, "auth_database_path", str(tmp_path / "auth.sqlite3"))
+    monkeypatch.setattr(settings, "admin_username", "real.admin@example.test")
+    monkeypatch.setattr(settings, "admin_password", "too-short")
+    monkeypatch.setattr(settings, "demo_auth_enabled", True)
+    monkeypatch.setattr(settings, "demo_auth_public", True)
+    monkeypatch.setattr("app.main.is_llm_enabled", lambda: True)
+    monkeypatch.setattr("app.rag.vectorstore.count_chunks", lambda agent: 1)
+
+    with TestClient(app) as client:
+        assert client.get("/api/health").status_code == 200
+        employee_demo = client.post(
+            "/api/auth/login",
+            json={"role": "employee"},
+        )
+        admin_demo = client.post(
+            "/api/auth/login",
+            json={"role": "admin"},
+        )
+
+    assert employee_demo.status_code == 200
+    assert employee_demo.json()["user"]["role"] == "employee"
+    assert admin_demo.status_code == 200
+    assert admin_demo.json()["user"]["username"] == "demo-admin@demo.invalid"
+
+
 def test_demo_login_uses_selected_role_and_keeps_admin_apis_protected(monkeypatch):
     monkeypatch.setattr(settings, "demo_auth_enabled", True)
     monkeypatch.setattr("app.api.auth_routes._demo_login_enabled_for", lambda request: True)

@@ -12,21 +12,16 @@
   <script>
     const demoAdminContent = `
       <section class="page-header">
-        <div><p class="eyebrow">SAMPLE WORKSPACE</p><h1>Demo administrator</h1>
-          <p>This view uses fictional sample information. It does not expose live documents, user records, analytics, or administrative controls.</p>
+        <div><p class="eyebrow">RESTRICTED DEMO</p><h1>Demo administrator</h1>
+          <p>Explore the employee portal and knowledge assistant. This account has no access to production records or administrator controls.</p>
         </div>
       </section>
-      <section class="stat-grid" aria-label="Synthetic demo metrics">
-        <article class="stat-card"><div class="stat-label">Sample knowledge collections</div><div class="stat-value">3</div><div class="stat-delta">HR · IT · Policy</div></article>
-        <article class="stat-card"><div class="stat-label">Example indexed documents</div><div class="stat-value">24</div><div class="stat-delta">Fictional demo count</div></article>
-        <article class="stat-card"><div class="stat-label">Example assistant status</div><div class="stat-value">Ready</div><div class="stat-delta">Ask the assistant a question</div></article>
-      </section>
       <section class="analytics-empty-panel">
-        <h2>Available in this demo</h2>
-        <p>Explore the same employee portal and assistant knowledge base available to employee demo users. This page adds no access to live administrative data or controls.</p>
+        <h2>Assistant access</h2>
+        <p>Ask questions about the demonstration knowledge base. Answers use the same document-grounded assistant available to employee demo users.</p>
         <a class="btn btn-primary" href="chat.html">Open assistant</a>
       </section>
-      <p class="login-demo-note">Restricted demo identity: document management, real analytics, evaluations, metrics, uploads, deletion, and database seeding are unavailable.</p>
+      <p class="login-demo-note">Documents, analytics, evaluations, metrics, uploads, deletion, and database seeding require a provisioned administrator account.</p>
     `;
     mountShell('demo-admin', 'Demo administrator', 'Demo / Overview', demoAdminContent, '', 'admin');
   </script>

@@ -424,9 +424,6 @@ select:focus-visible, [tabindex]:focus-visible {
 /* Analytics */
 .analytics-page { max-width: 1250px; }
 .analytics-status { display: flex; align-items: center; gap: 7px; margin: -7px 0 17px; color: var(--color-text-secondary); font-size: var(--type-xs); }
-.sample-data-notice { display: flex; align-items: flex-start; gap: 9px; margin: 1px 0 17px; padding: 12px 14px; border: 1px solid #E3D4AC; border-radius: 5px; background: #FBF6E8; }
-.notice-mark { width: 19px; height: 19px; display: grid; place-items: center; flex: 0 0 auto; border-radius: 50%; background: #EEE2BF; color: #665321; font-size: var(--type-xs); font-weight: 700; }
-.sample-data-notice p { color: #584B2E; font-size: var(--type-sm); line-height: 1.55; }
 .analytics-highlights { display: grid; grid-template-columns: repeat(3,minmax(0,1fr)); gap: 11px; margin: 15px 0; }
 .metric-card { display: grid; gap: 7px; padding: 12px 15px; border: 0; border-left: 2px solid var(--color-border-strong); border-radius: 0; background: transparent; }
 .metric-label { color: var(--color-text-muted); font-size: var(--type-xs); }
@@ -1353,9 +1350,6 @@ body { background: var(--color-bg); color: var(--color-text); }
 .document-name-wrap small, .panel-unit, .activity-bar-column > span, .activity-bar-column small { color: var(--color-text-muted); }
 .index-status { color: var(--color-accent); }
 .index-status > span, .connection-dot.connected { background: var(--color-accent); }
-.sample-data-notice { border-color: #E3D4AC; background: #FBF6E8; }
-.notice-mark { background: #EEE2BF; color: #665321; }
-.sample-data-notice p { color: #584B2E; }
 .activity-bar-column > div, .activity-fill { background: var(--color-primary); }
 .activity-fill.hr { background: var(--color-hr); }
 .activity-fill.it { background: var(--color-it); }
@@ -1479,18 +1473,7 @@ body { background: var(--color-bg); color: var(--color-text); }
 .portal-section-heading { display: flex; align-items: end; justify-content: space-between; gap: 15px; margin-bottom: 16px; }
 .portal-section-heading .eyebrow { margin: 0 0 6px; font-size: 9px; letter-spacing: .12em; }
 .portal-section-heading h2, .portal-support-strip h2 { margin: 0; color: #241B4B; font-size: 22px; font-weight: 650; letter-spacing: -.035em; }
-.portal-sample-label { padding: 5px 8px; border: 1px solid #DCE4F0; border-radius: 4px; background: #FFFFFF; color: #64748B; font-size: 9px; font-weight: 700; letter-spacing: .07em; }
-.portal-announcement-grid { display: grid; grid-template-columns: repeat(3, minmax(0,1fr)); gap: 14px; }
-.portal-announcement-card { min-height: 215px; padding: 20px; border: 1px solid #DCE4F0; border-radius: 9px; background: #FFFFFF; box-shadow: 0 3px 12px rgba(23,37,84,.035); transition: transform 150ms ease, box-shadow 150ms ease; }
-.portal-announcement-card:hover { transform: translateY(-2px); box-shadow: 0 9px 24px rgba(23,37,84,.08); }
-.portal-card-icon { display: grid; width: 34px; height: 34px; place-items: center; border-radius: 9px; font-size: 14px; }
-.announcement-icon-indigo { background: #EEF2FF; color: #4338CA; }
-.announcement-icon-teal { background: #E5F5F2; color: #0F8D7C; }
-.announcement-icon-coral { background: #FFF0F0; color: #C45362; }
-.portal-card-kicker { margin: 15px 0 6px; color: #64748B; font-size: 9px; font-weight: 700; letter-spacing: .08em; }
-.portal-announcement-card h3 { margin: 0 0 7px; color: #172033; font-size: 15px; font-weight: 650; line-height: 1.4; }
-.portal-announcement-card > p:not(.portal-card-kicker) { margin: 0 0 15px; color: #64748B; font-size: 11px; line-height: 1.65; }
-.portal-card-date { color: #8692A4; font-size: 10px; }
+.portal-empty-state { margin: 0; padding: 22px; border: 1px solid #DCE4F0; border-radius: 9px; background: #FFFFFF; color: #64748B; font-size: 12px; line-height: 1.6; }
 .portal-resources-section { margin-top: 39px; }
 .portal-resource-grid { display: grid; grid-template-columns: repeat(2, minmax(0,1fr)); gap: 11px; }
 .portal-resource-card { display: flex; min-width: 0; min-height: 78px; align-items: center; gap: 12px; padding: 13px 15px; border: 1px solid #DCE4F0; border-radius: 8px; background: #FFFFFF; color: inherit; text-align: left; text-decoration: none; cursor: pointer; transition: border-color 140ms ease, background 140ms ease, transform 140ms ease; }
@@ -1597,8 +1580,6 @@ html:has(body.embedded-chat), body.embedded-chat { width: 100%; height: 100%; mi
   .portal-nav { order: 3; width: 100%; justify-content: flex-start; overflow-x: auto; padding: 4px 0 2px; }
   .portal-account { margin-left: auto; }
   .portal-account-name { display: none; }
-  .portal-announcement-grid { grid-template-columns: repeat(2,minmax(0,1fr)); }
-  .portal-announcement-card:last-child { grid-column: 1 / -1; min-height: auto; }
   .portal-hero-art { right: 2%; opacity: .72; }
 }
 @media (max-width: 600px) {
@@ -1621,9 +1602,7 @@ html:has(body.embedded-chat), body.embedded-chat { width: 100%; height: 100%; mi
   .portal-hero-action { min-height: 39px; margin-top: 17px; padding: 0 11px; font-size: 10px; }
   .portal-section { margin-top: 29px; }
   .portal-section-heading h2 { font-size: 19px; }
-  .portal-announcement-grid, .portal-resource-grid { grid-template-columns: 1fr; gap: 9px; }
-  .portal-announcement-card, .portal-announcement-card:last-child { min-height: 0; grid-column: auto; padding: 16px; }
-  .portal-card-kicker { margin-top: 11px; }
+  .portal-resource-grid { grid-template-columns: 1fr; gap: 9px; }
   .portal-support-strip { align-items: flex-start; flex-direction: column; gap: 15px; padding: 18px; }
   .portal-support-button { min-height: 36px; }
   .portal-footer { flex-direction: column; gap: 6px; font-size: 9px; }
@@ -1632,5 +1611,5 @@ html:has(body.embedded-chat), body.embedded-chat { width: 100%; height: 100%; mi
   .assistant-panel.minimized { inset: auto 8px 8px; height: 61px; }
 }
 @media (prefers-reduced-motion: reduce) {
-  .portal-announcement-card, .portal-resource-card, .portal-hero-action, .portal-support-button, .assistant-fab, .assistant-panel { animation: none !important; transition: none !important; }
+  .portal-resource-card, .portal-hero-action, .portal-support-button, .assistant-fab, .assistant-panel { animation: none !important; transition: none !important; }
 }

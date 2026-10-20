@@ -4,8 +4,11 @@ from __future__ import annotations
 
 import logging
 import uuid
+from collections import deque
 from datetime import datetime, timezone
+from math import ceil
 from pathlib import Path
+from threading import Lock
 from time import perf_counter
 from typing import Annotated
 
@@ -50,8 +53,9 @@ router = APIRouter(prefix="/api")
 logger = logging.getLogger(__name__)
 
 
-# In-memory query log for analytics (Phase 3: replace with DB)
-_QUERY_LOG: list[dict] = []
+# Bounded process-local analytics history; it resets on restart by design.
+_QUERY_LOG: deque[dict] = deque(maxlen=1000)
+_QUERY_LOG_LOCK = Lock()
 
 
 # ---------- Health ----------
@@ -119,14 +123,15 @@ def chat(req: ChatRequest) -> ChatResponse:
     )
 
     # Log for analytics + metrics
-    _QUERY_LOG.append(
-        {
-            "agent": agent_id,
-            "latency_ms": result.latency_ms,
-            "sources_count": len(result.sources),
-            "timestamp": datetime.now(timezone.utc).isoformat(),
-        }
-    )
+    with _QUERY_LOG_LOCK:
+        _QUERY_LOG.append(
+            {
+                "agent": agent_id,
+                "latency_ms": result.latency_ms,
+                "sources_count": len(result.sources),
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+            }
+        )
     metrics.inc(f"chat_queries_total{{agent=\"{agent_id}\"}}")
     metrics.inc(f"chat_chunks_retrieved_total{{agent=\"{agent_id}\"}}", len(result.sources))
     metrics.observe(f"chat_latency_ms{{agent=\"{agent_id}\"}}", result.latency_ms)
@@ -268,48 +273,37 @@ def remove_document(agent: str, doc_name: str) -> dict:
     dependencies=[Depends(require_admin)],
 )
 def analytics() -> AnalyticsResponse:
-    """Return aggregated analytics. Phase 2: live counts from query log + DB."""
+    """Return measured process-local activity and completed evaluation results."""
+    cutoff = datetime.now(timezone.utc).timestamp() - 7 * 24 * 60 * 60
+    with _QUERY_LOG_LOCK:
+        query_snapshot = tuple(_QUERY_LOG)
+    recent_queries = [
+        query
+        for query in query_snapshot
+        if datetime.fromisoformat(query["timestamp"]).timestamp() >= cutoff
+    ]
     # Query volume by agent
     by_agent: dict[str, int] = {a: 0 for a in settings.enabled_agents.split(",") if a.strip()}
     by_day: dict[str, int] = {}
     latencies: list[int] = []
-    for q in _QUERY_LOG:
+    for q in recent_queries:
         by_agent[q["agent"]] = by_agent.get(q["agent"], 0) + 1
         latencies.append(q["latency_ms"])
         day = q["timestamp"][:10]
         by_day[day] = by_day.get(day, 0) + 1
 
-    # If we have no real queries yet, return mock numbers consistent with Phase 1
-    if not latencies:
-        by_agent = {"hr": 616, "it": 411, "policy": 257}
-        by_day = {
-            "2026-08-12": 142,
-            "2026-08-13": 198,
-            "2026-08-14": 176,
-            "2026-08-15": 211,
-            "2026-08-16": 187,
-            "2026-08-17": 84,
-            "2026-08-18": 96,
-        }
-        latencies = [1400, 1800, 2200, 2400, 1100, 1500, 1900, 1300, 1700, 2100]
-        queries_this_week = 1284
-        unique_users = 312
-    else:
-        queries_this_week = len(_QUERY_LOG)
-        unique_users = 1  # No user tracking in Phase 2
-
     latencies_sorted = sorted(latencies)
-    p50 = latencies_sorted[len(latencies_sorted) // 2] if latencies_sorted else 0
-    p95_idx = int(len(latencies_sorted) * 0.95)
-    p95 = latencies_sorted[min(p95_idx, len(latencies_sorted) - 1)] if latencies_sorted else 0
+    p50 = latencies_sorted[len(latencies_sorted) // 2] if latencies_sorted else None
+    p95_idx = ceil(len(latencies_sorted) * 0.95) - 1
+    p95 = latencies_sorted[min(p95_idx, len(latencies_sorted) - 1)] if latencies_sorted else None
 
     return AnalyticsResponse(
-        accuracy=0.874,
-        retrieval_recall_at_5=0.91,
+        accuracy=None,
+        retrieval_recall_at_5=None,
         p50_latency_ms=p50,
         p95_latency_ms=p95,
-        queries_this_week=queries_this_week,
-        unique_users=unique_users,
+        queries_this_week=len(recent_queries),
+        unique_users=None,
         queries_by_agent=by_agent,
         queries_by_day=by_day,
         ragas_metrics=_get_ragas_metrics(),
@@ -317,7 +311,7 @@ def analytics() -> AnalyticsResponse:
 
 
 def _get_ragas_metrics() -> dict[str, dict[str, float]]:
-    """Return live RAGAS metrics from the last eval run, with mock fallback."""
+    """Return measured RAGAS metrics from the last completed evaluation."""
     cached = _LAST_EVAL_RESULT
     if cached:
         out: dict[str, dict[str, float]] = {}
@@ -331,15 +325,8 @@ def _get_ragas_metrics() -> dict[str, dict[str, float]]:
                     "context_precision": round(sum(r["context_precision"] for r in agent_results) / n, 3),
                     "context_recall": round(sum(r["context_recall"] for r in agent_results) / n, 3),
                 }
-            else:
-                out[agent] = {"faithfulness": 0, "answer_relevancy": 0, "context_precision": 0, "context_recall": 0}
         return out
-    # Mock values when no live eval has been run
-    return {
-        "hr": {"faithfulness": 0.92, "answer_relevancy": 0.88, "context_precision": 0.86, "context_recall": 0.91},
-        "it": {"faithfulness": 0.89, "answer_relevancy": 0.91, "context_precision": 0.83, "context_recall": 0.87},
-        "policy": {"faithfulness": 0.94, "answer_relevancy": 0.86, "context_precision": 0.90, "context_recall": 0.93},
-    }
+    return {}
 
 
 _LAST_EVAL_RESULT: dict | None = None

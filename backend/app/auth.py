@@ -25,6 +25,10 @@ PASSWORD_HASH_ITERATIONS = 600_000
 _DUMMY_PASSWORD_HASH = ""
 
 
+class AdminBootstrapConfigurationError(RuntimeError):
+    """Safe configuration error that should not disable the public demo flows."""
+
+
 @dataclass(frozen=True)
 class AuthenticatedUser:
     username: str
@@ -104,29 +108,48 @@ def initialize_auth_store() -> None:
             CREATE INDEX IF NOT EXISTS sessions_expiry_idx ON sessions(expires_at);
             """
         )
-    if bool(settings.admin_username.strip()) != bool(settings.admin_password):
-        logger.warning(
-            "Admin bootstrap configuration is incomplete; use manage_users.py "
-            "to provision the initial administrator."
+    configured_username = settings.admin_username.strip().casefold()
+    configured_password = settings.admin_password
+    if bool(configured_username) != bool(configured_password):
+        raise AdminBootstrapConfigurationError(
+            "ADMIN_USERNAME and ADMIN_PASSWORD must both be configured for administrator bootstrap."
         )
-    elif settings.admin_username.strip():
+    if configured_username:
+        if len(configured_username) > 254:
+            raise AdminBootstrapConfigurationError("ADMIN_USERNAME must contain at most 254 characters.")
+        if configured_username == DEMO_ADMIN_USERNAME:
+            raise AdminBootstrapConfigurationError("ADMIN_USERNAME is reserved for the limited demo identity.")
+        if len(configured_password) < 12:
+            raise AdminBootstrapConfigurationError(
+                "ADMIN_PASSWORD must be at least 12 characters to bootstrap an administrator."
+            )
         with _connect() as connection:
             exists = connection.execute(
-                "SELECT 1 FROM users WHERE username = ?",
-                (settings.admin_username.strip().casefold(),),
+                "SELECT username, password_hash, role, active FROM users WHERE username = ?",
+                (configured_username,),
             ).fetchone()
-        if exists:
-            logger.info("Configured initial administrator already exists.")
-        else:
-            if len(settings.admin_password) < 12:
-                raise RuntimeError(
-                    "ADMIN_PASSWORD must be at least 12 characters to bootstrap an administrator."
-                )
+        if exists is None:
             create_user(
-                settings.admin_username,
-                settings.admin_password,
+                configured_username,
+                configured_password,
                 "admin",
             )
+            logger.info("Configured initial administrator was provisioned.")
+        elif exists["role"] != "admin":
+            raise AdminBootstrapConfigurationError(
+                "ADMIN_USERNAME is already assigned to a non-administrator account; no account was changed."
+            )
+        elif not exists["active"]:
+            raise AdminBootstrapConfigurationError(
+                "The configured administrator account is inactive; no account was changed."
+            )
+        elif not _verify_password(configured_password, exists["password_hash"]):
+            raise AdminBootstrapConfigurationError(
+                "The configured administrator already exists with a different password; "
+                "bootstrap does not reset existing credentials."
+            )
+        else:
+            logger.info("Configured initial administrator is ready.")
 
 
 def create_user(username: str, password: str, role: str) -> None:

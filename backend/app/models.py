@@ -70,12 +70,12 @@ class DocumentUploadResponse(BaseModel):
 # ---------- Analytics ----------
 
 class AnalyticsResponse(BaseModel):
-    accuracy: float
-    retrieval_recall_at_5: float
-    p50_latency_ms: int
-    p95_latency_ms: int
+    accuracy: float | None
+    retrieval_recall_at_5: float | None
+    p50_latency_ms: int | None
+    p95_latency_ms: int | None
     queries_this_week: int
-    unique_users: int
+    unique_users: int | None
     queries_by_agent: dict[str, int]
     queries_by_day: dict[str, int]
     ragas_metrics: dict[str, dict[str, float]]

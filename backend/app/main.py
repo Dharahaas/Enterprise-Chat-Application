@@ -21,7 +21,13 @@ from fastapi.responses import RedirectResponse
 
 from app.api.auth_routes import router as auth_router
 from app.api.routes import router as api_router
-from app.auth import SESSION_COOKIE, get_session_user, initialize_auth_store, is_demo_admin
+from app.auth import (
+    SESSION_COOKIE,
+    AdminBootstrapConfigurationError,
+    get_session_user,
+    initialize_auth_store,
+    is_demo_admin,
+)
 from app.config import is_llm_enabled, settings
 from app.request_context import reset_request_id, set_request_id
 
@@ -63,8 +69,13 @@ async def lifespan(app: FastAPI):
     )
     try:
         logger.info("Startup stage=auth_store status=starting")
-        initialize_auth_store()
-        logger.info("Startup stage=auth_store status=complete")
+        try:
+            initialize_auth_store()
+            logger.info("Startup stage=auth_store status=complete")
+        except AdminBootstrapConfigurationError as exc:
+            # Invalid optional real-admin bootstrap settings should not disable
+            # the separately restricted employee and demo-admin experiences.
+            logger.error("Admin account bootstrap was not applied: %s", exc)
 
         from app.rag.llm import llm_provider_name
         logger.info("Startup configured language-model provider=%s", llm_provider_name())

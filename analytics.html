@@ -26,10 +26,6 @@
         .replace(/'/g, '&#39;');
     }
 
-    function isSampleAnalytics(data) {
-      return Number(data?.unique_users) > 1;
-    }
-
     function renderActivityChart(days) {
       const entries = Object.entries(days || {}).sort(([a], [b]) => a.localeCompare(b)).slice(-14);
       if (!entries.length) return '<div class="chart-empty">No query activity has been recorded yet.</div>';
@@ -85,10 +81,8 @@
         return;
       }
 
-      const sampleData = isSampleAnalytics(analyticsData);
-      const liveMetrics = !sampleData && Number(analyticsData.queries_this_week) > 0;
+      const liveMetrics = Number(analyticsData.queries_this_week) > 0;
       root.innerHTML = `
-        ${sampleData ? '<div class="sample-data-notice" role="note"><span class="notice-mark">i</span><p>The backend currently reports sample analytics rather than recorded activity. Live charts will appear after real chat requests are recorded.</p></div>' : ''}
         <div class="analytics-status"><span class="connection-dot ${liveMetrics ? 'connected' : ''}"></span>${liveMetrics ? 'Showing recorded backend activity' : 'Waiting for recorded activity'}</div>
         ${liveMetrics ? `
           <section class="analytics-highlights">
@@ -104,7 +98,7 @@
           <section class="analytics-empty-panel">
             <div class="analytics-empty-mark"><svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M4 19V5m0 14h16M8 15v-3m4 3V8m4 7v-5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg></div>
             <h2>Analytics will build as you work</h2>
-            <p>Activity counts and response timings are held in memory by the current backend process. Send chat questions to start collecting activity; those counters reset when the backend restarts.</p>
+            <p>Activity and response timings cover up to the last 1,000 requests handled by this process. The history resets when the backend restarts.</p>
           </section>
         `}
         <section class="evaluation-panel">
@@ -163,7 +157,7 @@
     async function renderAnalyticsPage() {
       const mainContent = `
         <section class="page analytics-page">
-          <div class="page-intro"><div><p class="eyebrow">OBSERVABILITY</p><h1>Analytics</h1><p>Backend-recorded usage and evaluation results. Sample values are identified rather than presented as live activity.</p></div><button class="secondary-button" type="button" onclick="loadAnalytics()"><svg viewBox="0 0 20 20" fill="none" aria-hidden="true"><path d="M16.5 7.5A6.75 6.75 0 0 0 4 6l-1.5 1.5M3.5 4.5v3h3m-3 5A6.75 6.75 0 0 0 16 14l1.5-1.5m0 3v-3h-3" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>Refresh</button></div>
+          <div class="page-intro"><div><p class="eyebrow">OBSERVABILITY</p><h1>Analytics</h1><p>Recorded backend activity and completed evaluation results.</p></div><button class="secondary-button" type="button" onclick="loadAnalytics()"><svg viewBox="0 0 20 20" fill="none" aria-hidden="true"><path d="M16.5 7.5A6.75 6.75 0 0 0 4 6l-1.5 1.5M3.5 4.5v3h3m-3 5A6.75 6.75 0 0 0 16 14l1.5-1.5m0 3v-3h-3" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>Refresh</button></div>
           <div id="analyticsContent"></div>
         </section>
       `;

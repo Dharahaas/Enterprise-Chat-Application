@@ -369,7 +369,7 @@ only; sign-in, chat, document management, and analytics require the backend.
 | Chat responses | **LangChain RAG → Gemini free tier** (or explicit setup/provider message) | Unavailable |
 | Source citations | **Chroma vector search** with source metadata | Unavailable |
 | Document ingestion | **Backend pipeline: chunk → embed → store** | Unavailable |
-| Analytics | Admin-only backend endpoints; some existing evaluation fields remain sample fallback values | Unavailable |
+| Analytics | Admin-only, measured process-local activity and completed evaluations | Unavailable |
 | Vector DB | **Chroma (local file-based)** | n/a |
 
 ---
@@ -405,11 +405,22 @@ To create the public evaluation service, push this configuration to the
 repository's `main` branch, then in Render choose **New → Blueprint**, select
 the repository and `render.yaml`, and create the service using the **Free**
 plan. Enter `GEMINI_API_KEY` as a secret when prompted. The Blueprint sets
-production mode, Gemini, and public evaluation sign-in. The public demo grants
-only the shared employee demo role; invalid credentials cannot obtain demo
-administrator access, and protected admin routes still require real admin
-credentials. Demo authentication is not production-grade; do not submit
-sensitive information. No admin account is created by default.
+production mode, Gemini, and public evaluation sign-in. Employee demo access
+and the restricted synthetic demo-admin view are separate from provisioned
+administrator accounts. Demo identities cannot access real administrator data
+or privileged APIs. Demo authentication is not production-grade; do not submit
+sensitive information. No real admin account is created by default.
+
+To provision a real Render administrator, set `ADMIN_USERNAME` and
+`ADMIN_PASSWORD` in that service's Environment settings. The username is
+normalized to lowercase; the password must be at least 12 characters. On
+startup, the backend creates the account with a PBKDF2 password hash. If that
+username already exists, startup never changes its password or role: it checks
+that it is an active administrator and that the configured password matches.
+A mismatch is reported in startup logs without printing credentials; sign in
+with the existing password or provision a different username. These settings
+are optional for the public demo. An invalid optional admin bootstrap does not
+disable the employee or restricted demo-admin flows.
 
 The service root redirects to the existing sign-in page. The browser calls the
 API on its current origin. For the separate local frontend server, local
@@ -456,8 +467,8 @@ not by itself certify answer correctness or production readiness.
 | **Answer Relevancy** | How directly addresses query | ≥ 0.85 | Live via `/api/eval/run` |
 | **Context Precision** | Relevance of top-K chunks | ≥ 0.85 | Live via `/api/eval/run` |
 | **Context Recall** | Coverage of needed chunks | ≥ 0.88 | Live via `/api/eval/run` |
-| **Answer accuracy** | End-to-end correctness | ≥ 90% | Live via `/api/eval/run` |
-| **Retrieval recall@5** | % of gold chunks in top-5 | ≥ 0.90 | Live via `/api/eval/run` |
+| **Answer accuracy** | End-to-end correctness | At least 90% | Not currently measured |
+| **Retrieval recall@5** | % of gold chunks in top-5 | At least 0.90 | Not currently measured |
 | **P50 latency** | Median query → response | ≤ 1.5s | Live via `/api/metrics` |
 | **P95 latency** | 95th-percentile latency | ≤ 3.0s | Live via `/api/metrics` |
 
