@@ -20,7 +20,7 @@ copy .env.example .env
 ```
 
 By default, the backend uses:
-- **HuggingFace sentence-transformers** (`all-MiniLM-L6-v2`) for embeddings — runs locally, no API key
+- **Chroma ONNX** (`all-MiniLM-L6-v2`, 384 dimensions) for CPU embeddings — no embedding API key
 - **Chroma** for the vector DB — local file-based, no signup
 - **Gemini 2.5 Flash-Lite** for hosted answer generation
 
@@ -76,6 +76,9 @@ content, embeds those chunks, and stores them in the selected agent's persistent
 Chroma collection. The original uploaded file is retained in the server's
 `data/uploads` directory. This expands retrieval context; it does **not** train
 or fine-tune Gemini. Answers remain limited to evidence in retrieved chunks.
+Chroma's ONNX MiniLM embedding model is dimension-compatible with the existing
+384-dimensional `all-MiniLM-L6-v2` index. Rebuild the index when changing to a
+different embedding model.
 
 ### 3. Run the server
 
@@ -83,7 +86,9 @@ or fine-tune Gemini. Answers remain limited to evidence in retrieved chunks.
 uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
 ```
 
-The server auto-seeds sample documents on first run. Once running:
+The server auto-seeds sample documents on first run. Embeddings load lazily
+when retrieval or ingestion is first used, not during server startup. Chroma
+downloads its ONNX model on first use. Once running:
 
 - **API docs (Swagger):** <http://localhost:8000/docs>
 - **Health check:** <http://localhost:8000/api/health>
@@ -172,7 +177,7 @@ backend/
 │   │   ├── agent_specs.py    ← HR / IT / Policy agent definitions
 │   │   └── router.py         ← keyword-based agent classifier
 │   ├── rag/
-│   │   ├── embeddings.py     ← HuggingFace sentence-transformers
+│   │   ├── embeddings.py     ← Chroma ONNX MiniLM embeddings
 │   │   ├── vectorstore.py    ← Chroma vector DB client
 │   │   ├── llm.py            ← configured Gemini/OpenAI chat model
 │   │   └── pipeline.py       ← retrieve → rerank → generate
@@ -201,7 +206,7 @@ backend/
 
 ```
 1. Receive question and optional selected agent; classify only when no agent was supplied
-2. Embed question (HuggingFace all-MiniLM-L6-v2 → 384-dim vector)
+2. Embed question (Chroma ONNX all-MiniLM-L6-v2 → 384-dim vector)
 3. Vector search in the resolved agent's Chroma collection (top-K=5), filtering scores below 0.35
 4. Rerank and deduplicate confident passages (top-3)
 5. Build prompt: system prompt + context chunks + question

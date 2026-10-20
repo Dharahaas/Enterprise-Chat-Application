@@ -1,35 +1,46 @@
-"""Embeddings — uses HuggingFace sentence-transformers locally (no API key)."""
+"""Embeddings — use Chroma's CPU-friendly ONNX MiniLM implementation."""
 
 from __future__ import annotations
 
 from functools import lru_cache
 from typing import Any
 
+from chromadb.utils.embedding_functions import ONNXMiniLM_L6_V2
 from langchain_core.embeddings import Embeddings
 
 from app.config import settings
 
 
+class ChromaONNXEmbeddings(Embeddings):
+    """Adapt Chroma's default ONNX embedding function to LangChain's interface."""
+
+    def __init__(self) -> None:
+        self._embedding_function = ONNXMiniLM_L6_V2(
+            preferred_providers=["CPUExecutionProvider"]
+        )
+
+    def embed_documents(self, texts: list[str]) -> list[list[float]]:
+        return [
+            [float(value) for value in vector]
+            for vector in self._embedding_function(texts)
+        ]
+
+    def embed_query(self, text: str) -> list[float]:
+        return self.embed_documents([text])[0]
+
+
 @lru_cache(maxsize=1)
 def get_embeddings() -> Embeddings:
-    """Return a cached embeddings instance.
-
-    Uses HuggingFace sentence-transformers (all-MiniLM-L6-v2 by default) which:
-    - Runs locally, no API key needed
-    - Produces 384-dim vectors
-    - ~80MB model size, fast on CPU
-    """
-    try:
-        from langchain_huggingface import HuggingFaceEmbeddings
-    except ImportError:
-        # Fallback for older langchain-community
-        from langchain_community.embeddings import HuggingFaceEmbeddings  # type: ignore[no-redef]
-
-    return HuggingFaceEmbeddings(
-        model_name=settings.embedding_model,
-        model_kwargs={"device": "cpu"},
-        encode_kwargs={"normalize_embeddings": True},
-    )
+    """Return a cached, lazily loaded ONNX embedding adapter."""
+    if settings.embedding_model not in {
+        "all-MiniLM-L6-v2",
+        "sentence-transformers/all-MiniLM-L6-v2",
+    }:
+        raise ValueError(
+            "Chroma ONNX embeddings support only all-MiniLM-L6-v2; "
+            f"configured model is {settings.embedding_model!r}"
+        )
+    return ChromaONNXEmbeddings()
 
 
 def embed_query(query: str) -> list[float]:
@@ -44,5 +55,5 @@ def embed_texts(texts: list[str]) -> list[list[float]]:
 
 
 def fake_embedding_dim() -> int:
-    """Stand-in dimension used if real embeddings fail to load."""
+    """Return the configured embedding dimension."""
     return settings.embedding_dim

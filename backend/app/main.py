@@ -9,7 +9,6 @@ from __future__ import annotations
 import logging
 from contextlib import asynccontextmanager
 from pathlib import Path, PurePosixPath
-from time import perf_counter
 from urllib.parse import unquote
 
 from fastapi import FastAPI, Request, Response
@@ -52,25 +51,6 @@ async def lifespan(app: FastAPI):
 
     from app.rag.llm import llm_provider_name
     logger.info("LLM provider: %s", llm_provider_name())
-
-    # Load the local embedding model before the first employee query.
-    from app.rag.embeddings import get_embeddings
-
-    embedding_start = perf_counter()
-    try:
-        get_embeddings()
-    except Exception as exc:
-        logger.warning(
-            "Embedding warm-up failed stage=startup model=%s error_type=%s",
-            settings.embedding_model,
-            type(exc).__name__,
-        )
-    else:
-        logger.info(
-            "Embedding warm-up complete model=%s elapsed_ms=%d",
-            settings.embedding_model,
-            int((perf_counter() - embedding_start) * 1000),
-        )
 
     # Auto-seed sample docs on first local development run.
     from app.rag.vectorstore import count_chunks

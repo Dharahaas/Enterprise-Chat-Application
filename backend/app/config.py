@@ -63,7 +63,7 @@ class Settings(BaseSettings):
     vector_db_path: str = str(
         BACKEND_DIR / "data" / "chroma_db"
     )
-    embedding_model: str = "sentence-transformers/all-MiniLM-L6-v2"
+    embedding_model: str = "all-MiniLM-L6-v2"
     embedding_dim: int = 384
     collection_prefix: str = "eka_"  # eka_hr, eka_it, eka_policy
 

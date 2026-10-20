@@ -228,19 +228,50 @@ def test_health_endpoint():
     assert "hr" in data["agents"]
 
 
-def test_startup_warms_local_embedding_model(monkeypatch):
+def test_startup_does_not_load_embedding_model(monkeypatch):
     from fastapi.testclient import TestClient
     from app.main import app
     from app.rag import embeddings, vectorstore
 
-    warmed = []
-    monkeypatch.setattr(embeddings, "get_embeddings", lambda: warmed.append(True))
+    loaded = []
+    monkeypatch.setattr(embeddings, "get_embeddings", lambda: loaded.append(True))
     monkeypatch.setattr(vectorstore, "count_chunks", lambda agent: 1)
 
     with TestClient(app):
         pass
 
-    assert warmed == [True]
+    assert loaded == []
+
+
+def test_chroma_onnx_embeddings_preserve_384_dimensions(monkeypatch):
+    from app.rag import embeddings
+
+    calls = []
+    constructed = []
+
+    class FakeONNXMiniLM:
+        def __init__(self, preferred_providers):
+            assert preferred_providers == ["CPUExecutionProvider"]
+            constructed.append(self)
+
+        def __call__(self, texts):
+            calls.append(texts)
+            return [[0.25] * 384 for _ in texts]
+
+    monkeypatch.setattr(
+        embeddings,
+        "ONNXMiniLM_L6_V2",
+        FakeONNXMiniLM,
+    )
+
+    adapter = embeddings.ChromaONNXEmbeddings()
+
+    assert len(adapter.embed_query("query")) == 384
+    assert len(adapter.embed_documents(["first", "second"])) == 2
+    document_vectors = adapter.embed_documents(["text"])
+    assert all(len(vector) == 384 for vector in document_vectors)
+    assert len(constructed) == 1
+    assert calls == [["query"], ["first", "second"], ["text"]]
 
 
 def test_eval_runner(monkeypatch):

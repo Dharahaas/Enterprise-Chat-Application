@@ -88,7 +88,7 @@ Each agent grounds its answer in retrieved documents using **RAG**, so every res
 ```
 1. User question → normalize obvious typos and detect standalone conversation
 2. Greetings and capability questions are answered without document retrieval
-3. Knowledge question → embed with HuggingFace all-MiniLM-L6-v2 (384-dim)
+3. Knowledge question → embed with Chroma's ONNX all-MiniLM-L6-v2 (384-dim)
 4. Search the selected agent's Chroma collection; convert distances to cosine similarity
 5. Filter low-confidence and duplicate passages
 6. Build role-separated prompt and generate with Gemini 2.5 Flash-Lite
@@ -103,7 +103,7 @@ Each agent grounds its answer in retrieved documents using **RAG**, so every res
 | Phase | Scope | Tech | Status |
 |-------|-------|------|--------|
 | **Phase 1** | Frontend UI — login, chat, documents, analytics dashboard | HTML, CSS, JavaScript | ✅ Delivered |
-| **Phase 2** | RAG + Multi-Agent backend — LangChain, Chroma vector DB, HR/IT/Policy agents, document ingestion pipeline | Python, FastAPI, LangChain, Chroma, HuggingFace | ✅ Delivered |
+| **Phase 2** | RAG + Multi-Agent backend — LangChain, Chroma vector DB, HR/IT/Policy agents, document ingestion pipeline | Python, FastAPI, LangChain, Chroma ONNX | ✅ Delivered |
 | **Phase 3** | Evaluation and deployment preparation; supported single-host Docker Compose instructions | Docker Compose, HTTPS reverse proxy, RAG evaluation | Deployment is documented, not yet hosted |
 
 ---
@@ -154,7 +154,7 @@ The Phase 2 backend is a Python FastAPI application using LangChain for RAG orch
 - **FastAPI** REST API with Swagger docs at `/docs`
 - **LangChain** orchestration: prompt templates, retrievers, document loaders, text splitters
 - **Chroma** local vector database — no signup, no external dependencies
-- **HuggingFace sentence-transformers** (`all-MiniLM-L6-v2`) for embeddings — runs locally on CPU, no API key needed
+- **Chroma ONNX** (`all-MiniLM-L6-v2`) for CPU embeddings — loaded on the first retrieval or ingestion request; no embedding API key needed
 - **Three specialist agents** (HR / IT / Policy), each with its own vector namespace, system prompt, and retrieval config
 - **Configured language-model generation** — Gemini 2.5 Flash-Lite when `GEMINI_API_KEY` is configured; otherwise knowledge questions receive a clear setup message instead of a fabricated or chunk-based answer. Check AI Studio for your project's free-tier eligibility and quotas. OpenAI is an optional paid alternative.
 - **Document ingestion pipeline** — load PDF/DOCX/TXT/MD → chunk (size=512, overlap=64) → embed → upsert to vector DB
@@ -289,7 +289,7 @@ Langchain/
     │   │   ├── agent_specs.py          ← HR / IT / Policy definitions
     │   │   └── router.py               ← Keyword-based classifier
     │   ├── rag/
-    │   │   ├── embeddings.py           ← HuggingFace sentence-transformers
+    │   │   ├── embeddings.py           ← Chroma ONNX MiniLM embeddings
     │   │   ├── vectorstore.py          ← Chroma client
     │   │   ├── llm.py                  ← configured Gemini/OpenAI chat model
     │   │   └── pipeline.py             ← retrieve → rerank → generate
@@ -386,9 +386,15 @@ repository root because frontend assets are outside `backend/`.
 
 The Blueprint installs [`backend/requirements.txt`](./backend/requirements.txt),
 builds the bundled sample Chroma index, verifies every enabled agent collection,
-starts Uvicorn using Render's `$PORT`, and configures `/api/health` as its
-health check. Production startup refuses to run when an agent collection is
-missing instead of quietly starting with an empty knowledge base. The 11
+starts one Uvicorn worker on Render's `$PORT`, and configures `/api/health` as
+its health check. Production startup checks the built index without loading the
+embedding model, and refuses to run when an agent collection is missing instead
+of quietly starting with an empty knowledge base. The embedding path uses
+Chroma's 384-dimensional ONNX MiniLM model instead of PyTorch-backed
+`sentence-transformers`; the ONNX model is loaded lazily on the first retrieval
+or upload. Gemini remains the chat-generation provider. This avoids an
+embedding API dependency or billing requirement. The first retrieval may take
+longer while Chroma downloads the ONNX model. The 11
 synthetic sample document contents live in
 [`backend/app/data/sample_docs_seed.py`](./backend/app/data/sample_docs_seed.py);
 PDF/TXT examples are under `backend/data/sample_docs/`. The existing local
@@ -477,7 +483,7 @@ Or click the "Run Evaluation" button on the Analytics page.
 - FastAPI — async REST API
 - LangChain — RAG orchestration
 - Chroma — local vector database
-- HuggingFace sentence-transformers — embeddings (`all-MiniLM-L6-v2`)
+- Chroma ONNX — CPU embeddings (`all-MiniLM-L6-v2`, 384 dimensions)
 - langchain-openai — optional OpenAI LLM swap-in
 - PyPDF, python-docx — document loaders
 - Pydantic v2 — request/response schemas
