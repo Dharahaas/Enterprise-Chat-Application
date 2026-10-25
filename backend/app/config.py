@@ -75,7 +75,7 @@ class Settings(BaseSettings):
 
     # --- LLM ---
     # Embeddings remain local; Gemini Flash-Lite is the default hosted model.
-    llm_provider: Literal["gemini", "openai"] = "gemini"
+    llm_provider: Literal["gemini", "openai", "huggingface"] = "gemini"
     gemini_api_key: str = Field(
         default_factory=lambda: _read_secret_file("GEMINI_API_KEY"),
         repr=False,
@@ -83,6 +83,9 @@ class Settings(BaseSettings):
     gemini_model: str = "gemini-3.5-flash-lite"
     openai_api_key: str = ""
     openai_model: str = "gpt-4o-mini"
+    hf_token: str = Field(default_factory=lambda: _read_secret_file("HF_TOKEN"), repr=False)
+    hf_model_id: str = "openai/gpt-oss-20b:fastest"
+    hf_provider: str = "auto"
     llm_temperature: float = 0.2
     llm_max_tokens: int = 512
 
@@ -135,4 +138,9 @@ def is_llm_enabled() -> bool:
         return bool(
             settings.gemini_api_key.strip() or os.getenv("GEMINI_API_KEY", "").strip()
         )
-    return is_openai_enabled()
+    if settings.llm_provider == "openai":
+        return is_openai_enabled()
+    return bool(
+        settings.hf_token.strip()
+        or os.getenv("HF_TOKEN", "").strip()
+    )

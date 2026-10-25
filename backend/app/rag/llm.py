@@ -18,9 +18,18 @@ _client_instance: Any = None
 
 LLM_NOT_CONFIGURED_MESSAGE = (
     "A language model is not configured for this assistant yet. To generate "
-    "grounded answers, set GEMINI_API_KEY in backend/.env "
-    "and restart the backend."
+    "grounded answers, set GEMINI_API_KEY in backend/.env and restart the backend."
 )
+
+
+def llm_not_configured_message() -> str:
+    if settings.llm_provider == "gemini":
+        return LLM_NOT_CONFIGURED_MESSAGE
+    variable = "HF_TOKEN" if settings.llm_provider == "huggingface" else "OPENAI_API_KEY"
+    return (
+        "The selected language model provider is not configured. Set "
+        f"{variable} in backend/.env and restart the backend."
+    )
 
 
 class LLMNotConfiguredError(RuntimeError):
@@ -35,6 +44,10 @@ def llm_model_name() -> str:
     """Return the configured model identifier without exposing credentials."""
     if settings.llm_provider == "gemini":
         return settings.gemini_model.strip()
+    if settings.llm_provider == "huggingface":
+        model = settings.hf_model_id.strip()
+        provider = settings.hf_provider.strip()
+        return f"{model}:{provider}" if provider and provider != "auto" and ":" not in model else model
     return settings.openai_model.strip()
 
 
@@ -62,13 +75,15 @@ def diagnose_llm_error(
     ) or getattr(exc, "message", None) or str(exc)
     message = str(message).replace("\r", " ").replace("\n", " ").strip()
 
-    configured_key = settings.gemini_api_key or settings.openai_api_key
+    configured_key = settings.gemini_api_key or settings.openai_api_key or settings.hf_token
     configured_key = configured_key or os.getenv("GEMINI_API_KEY", "")
+    configured_key = configured_key or os.getenv("HF_TOKEN", "")
     if configured_key:
         message = message.replace(configured_key, "[REDACTED]")
     message = re.sub(r"(?i)\bBearer\s+\S+", "Bearer [REDACTED]", message)
     message = re.sub(r"(?i)\bAIza[0-9A-Za-z_-]{20,}\b", "[REDACTED]", message)
     message = re.sub(r"(?i)\bsk-[0-9A-Za-z_-]{8,}\b", "[REDACTED]", message)
+    message = re.sub(r"\bhf_[0-9A-Za-z]{8,}\b", "[REDACTED]", message)
     message = re.sub(
         r"(?i)(api[_ -]?key|authorization|token)(\s*[:=]\s*)[^,\s;}]+",
         r"\1\2[REDACTED]",
@@ -126,13 +141,15 @@ def _cached_chat_model(
             "api_key": api_key,
             "temperature": temperature,
             "max_tokens": max_tokens,
-            "timeout": 60 if provider == "gemini" else 30,
+            "timeout": 60 if provider in {"gemini", "huggingface"} else 30,
             "max_retries": 1,
         }
         if provider == "gemini":
             kwargs["base_url"] = (
                 "https://generativelanguage.googleapis.com/v1beta/openai/"
             )
+        elif provider == "huggingface":
+            kwargs["base_url"] = "https://router.huggingface.co/v1"
         client = client_factory(**kwargs)
         _client_instance = client
         _client_fingerprint = fingerprint
@@ -154,6 +171,14 @@ def get_llm() -> Any:
             ).strip()
             if not model:
                 raise ValueError("GEMINI_MODEL must not be empty")
+        elif settings.llm_provider == "huggingface":
+            model = settings.hf_model_id.strip()
+            api_key = settings.hf_token.strip() or os.getenv("HF_TOKEN", "").strip()
+            if not model:
+                raise ValueError("HF_MODEL_ID must not be empty")
+            provider = settings.hf_provider.strip()
+            if provider and provider != "auto" and ":" not in model:
+                model = f"{model}:{provider}"
         else:
             model = settings.openai_model.strip()
             api_key = settings.openai_api_key.strip() or os.getenv(

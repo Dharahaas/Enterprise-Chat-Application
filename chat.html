@@ -207,6 +207,7 @@
               <span class="message-author">${isUser ? 'You' : escapeHtml(agent.name)}</span>
               <time>${escapeHtml(message.time || '')}</time>
               ${message.latencyMs ? `<span>${Number(message.latencyMs).toLocaleString()} ms</span>` : ''}
+              ${message.llmProvider && message.llmModel ? `<span>${escapeHtml(message.llmProvider)} · ${escapeHtml(message.llmModel)}</span>` : ''}
             </div>
             <div class="message-content">${markdownToHtml(message.content)}</div>
             ${message.sources?.length ? renderSources(message.sources) : ''}
@@ -216,14 +217,20 @@
     }
 
     function renderSources(sources) {
+      const visibleSources = (Array.isArray(sources) ? sources : []).filter(source =>
+        source && typeof source === 'object' &&
+        [source.document, source.name, source.source, source.snippet, source.page, source.section]
+          .some(value => value !== null && value !== undefined && String(value).trim() !== '')
+      );
+      if (!visibleSources.length) return '';
       return `
         <details class="source-details">
-          <summary>${sources.length} ${sources.length === 1 ? 'source' : 'sources'}</summary>
+          <summary>${visibleSources.length} ${visibleSources.length === 1 ? 'source' : 'sources'}</summary>
           <ul class="source-list">
-            ${sources.map(source => `
+            ${visibleSources.map(source => `
               <li class="source-item">
                 <svg viewBox="0 0 20 20" fill="none" aria-hidden="true"><path d="M5.5 2.75h6l4 4v10.5H5.5a1.75 1.75 0 0 1-1.75-1.75V4.5A1.75 1.75 0 0 1 5.5 2.75Z" stroke="currentColor" stroke-width="1.4"/><path d="M11.5 2.75v4h4M7 11h7M7 14h5" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>
-                <span>${escapeHtml(source.document || source.name || 'Document')}${source.page ? ` · p. ${escapeHtml(source.page)}` : ''}${source.section ? ` · § ${escapeHtml(source.section)}` : ''}</span>
+                <span>${escapeHtml(source.document || source.name || source.source || 'Document')}${source.page ? ` · p. ${escapeHtml(source.page)}` : ''}${source.section ? ` · § ${escapeHtml(source.section)}` : ''}</span>
               </li>
             `).join('')}
           </ul>
@@ -452,7 +459,7 @@
       transcript.insertAdjacentHTML('beforeend', `
         <div class="chat-message assistant-message typing-message" id="typingMessage">
           <div class="message-avatar agent-avatar ${requestAgent.id}" aria-hidden="true">${escapeHtml(requestAgent.initial)}</div>
-          <div class="message-column"><div class="message-meta"><span class="message-author">${escapeHtml(requestAgent.name)}</span><span>Searching sources</span></div><div class="typing-dots" role="status" aria-label="Generating response"><span></span><span></span><span></span></div></div>
+          <div class="message-column"><div class="message-meta"><span class="message-author">${escapeHtml(requestAgent.name)}</span><span class="stream-status">Connecting</span></div><div class="typing-dots" role="status" aria-label="Waiting for response"><span></span><span></span><span></span></div><div class="stream-content message-content" aria-live="polite"></div></div>
         </div>
       `);
       scrollTranscriptToBottom();
@@ -465,19 +472,45 @@
           .slice(0, -1)
           .filter(message =>
             ['user', 'agent'].includes(message.role) &&
-            !message.isError &&
-            message.agent === conversation.agent
+            !message.isError
           )
           .slice(-6)
           .map(message => ({
             role: message.role === 'agent' ? 'assistant' : 'user',
             content: message.content,
+            ...(message.agent ? { agent: message.agent } : {}),
           }));
-        const response = await API.chat(
+        let streamedText = '';
+        let respondingAgent = requestAgent.id;
+        const response = await API.chatStream(
           question,
           conversation.agent,
           conversation.id,
           conversationHistory,
+          token => {
+            streamedText += token;
+            const streamContent = transcript.querySelector('.stream-content');
+            if (streamContent) streamContent.innerHTML = markdownToHtml(streamedText);
+            const dots = transcript.querySelector('.typing-dots');
+            if (dots) dots.hidden = true;
+            scrollTranscriptToBottom();
+          },
+          status => {
+            if (status.agent) {
+              respondingAgent = status.agent;
+              const responder = AGENTS.find(agent => agent.id === respondingAgent);
+              const author = transcript.querySelector('.typing-message .message-author');
+              if (author && responder) author.textContent = responder.name;
+            }
+            const label = transcript.querySelector('.typing-message .stream-status');
+            if (label) label.textContent = ({
+              routing: 'Choosing specialist',
+              retrieving: 'Searching company documents',
+              retrieved: 'Preparing response',
+              streaming: 'Responding',
+              generation_complete: 'Finalizing response',
+            })[status.stage] || 'Working';
+          },
         );
         const providerMessage = providerErrorMessage(response.error_code);
         reply = {
@@ -488,13 +521,19 @@
             document: source.document,
             page: source.page,
             section: source.section,
+            score: source.score,
+            snippet: source.snippet,
+            agent: source.agent,
           })),
           time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
           latencyMs: response.latency_ms,
+          llmModel: response.llm_model,
           llmProvider: response.llm_provider === 'gemini'
             ? 'Gemini Free Tier'
             : response.llm_provider === 'openai'
               ? 'OpenAI'
+              : response.llm_provider === 'huggingface'
+                ? 'Hugging Face Inference Providers'
               : response.llm_provider === 'unconfigured' ? 'Setup required' : '',
           isError: Boolean(response.error_code),
         };
@@ -502,7 +541,7 @@
         reply = {
           role: 'agent',
           content: error.message || 'The assistant could not complete this request. Please try again.',
-          agent: requestAgent.id,
+          agent: respondingAgent,
           sources: [],
           time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
           isError: true,

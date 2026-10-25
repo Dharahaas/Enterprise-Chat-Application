@@ -64,7 +64,11 @@ async def lifespan(app: FastAPI):
         bool(os.getenv("PORT")),
         os.getenv("PORT", "unset"),
         settings.llm_provider,
-        settings.gemini_model if settings.llm_provider == "gemini" else settings.openai_model,
+        (
+            settings.gemini_model if settings.llm_provider == "gemini"
+            else settings.openai_model if settings.llm_provider == "openai"
+            else settings.hf_model_id
+        ),
         is_llm_enabled(),
     )
     try:

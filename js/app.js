@@ -192,6 +192,73 @@ const API = (() => {
           conversation_history: conversationHistory,
         }),
       }),
+    chatStream: async (question, agent, conversationId, conversationHistory, onToken, onStatus) => {
+      if (typeof WebSocket === 'undefined') {
+        return API.chat(question, agent, conversationId, conversationHistory);
+      }
+      const base = await detect();
+      if (!base) throw new Error('The assistant service is unavailable. Check that the backend is running and try again.');
+      const endpoint = new URL(`${base}/api/chat/ws`);
+      endpoint.protocol = endpoint.protocol === 'https:' ? 'wss:' : 'ws:';
+      return new Promise((resolve, reject) => {
+        const requestId = globalThis.crypto?.randomUUID
+          ? globalThis.crypto.randomUUID()
+          : `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+        const socket = new WebSocket(endpoint);
+        let settled = false;
+        const fail = message => {
+          if (settled) return;
+          settled = true;
+          socket.close();
+          reject(new Error(message));
+        };
+        socket.addEventListener('open', () => {
+          socket.send(JSON.stringify({
+            v: 1,
+            type: 'chat',
+            request_id: requestId,
+            csrf_token: csrfToken,
+            payload: {
+              question,
+              agent,
+              conversation_id: conversationId,
+              conversation_history: conversationHistory,
+            },
+          }));
+        });
+        socket.addEventListener('message', event => {
+          let message;
+          try { message = JSON.parse(event.data); } catch (_) { return fail('The assistant returned an invalid stream event.'); }
+          if (message.v !== 1 || message.request_id !== requestId) return;
+          if (message.type === 'status') {
+            onStatus?.(message.payload || {});
+          } else if (message.type === 'token') {
+            onToken?.(message.payload?.text || '');
+          } else if (message.type === 'complete') {
+            settled = true;
+            resolve({
+              answer: message.payload.answer,
+              agent: message.payload.agent,
+              sources: message.payload.sources || [],
+              latency_ms: message.payload.total_ms,
+              llm_provider: message.payload.provider,
+              llm_model: message.payload.model_id,
+              conversation_id: message.payload.conversation_id,
+              time_to_first_token_ms: message.payload.time_to_first_token_ms,
+            });
+            socket.close();
+          } else if (message.type === 'error') {
+            fail(message.error?.message || 'The assistant could not complete this request.');
+          } else if (message.type === 'cancel') {
+            fail('The response was cancelled.');
+          }
+        });
+        socket.addEventListener('error', () => fail('The streaming connection failed. Please try again.'));
+        socket.addEventListener('close', () => {
+          if (!settled) fail('The stream ended before the response completed. Please retry.');
+        });
+      });
+    },
     listDocuments: () => request('/api/documents'),
     uploadDocument: (file, agent) => {
       const fd = new FormData();

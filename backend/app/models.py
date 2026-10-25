@@ -13,6 +13,7 @@ from pydantic import BaseModel, Field
 class ChatHistoryMessage(BaseModel):
     role: Literal["user", "assistant"]
     content: str = Field(..., min_length=1, max_length=2000)
+    agent: Literal["hr", "it", "policy"] | None = None
 
 
 class ChatRequest(BaseModel):
@@ -31,6 +32,7 @@ class SourceChunk(BaseModel):
     section: str | None = None
     score: float
     snippet: str
+    agent: Literal["hr", "it", "policy"] | None = None
 
 
 class ChatResponse(BaseModel):

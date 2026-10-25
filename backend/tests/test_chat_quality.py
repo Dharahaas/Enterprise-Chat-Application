@@ -526,6 +526,131 @@ def test_conversation_history_is_request_scoped_across_authenticated_users(
     ]
 
 
+def test_cross_agent_history_keeps_policy_answer_for_follow_up(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.api import routes
+    from app.rag.pipeline import RagResult
+
+    received: list[tuple[str, str, list[tuple[str, ...]]]] = []
+
+    def capture_rag(agent: str, question: str, history: list[tuple] | None = None) -> RagResult:
+        received.append((agent, question, history or []))
+        return RagResult(
+            answer="Policy says employees may work remotely two days per week.",
+            agent=agent,
+            sources=[],
+            latency_ms=1,
+            llm_provider="test",
+        )
+
+    monkeypatch.setattr(routes, "run_rag", capture_rag)
+    common_history = [
+        {"role": "user", "content": "How do I request leave?", "agent": "hr"},
+        {"role": "assistant", "content": "Submit a request in the HR portal.", "agent": "hr"},
+        {"role": "user", "content": "What is the remote work policy?", "agent": "hr"},
+        {"role": "assistant", "content": "Employees may work remotely two days per week.", "agent": "policy"},
+    ]
+
+    result = post_chat(
+        "Can I do that on Fridays for remote work?",
+        agent="hr",
+        conversation_history=common_history,
+    )
+
+    assert result["agent"] == "policy"
+    assert received == [
+        (
+            "policy",
+            "Can I do that on Fridays for remote work?",
+            [
+                ("user", "How do I request leave?", "hr"),
+                ("assistant", "Submit a request in the HR portal.", "hr"),
+                ("user", "What is the remote work policy?", "hr"),
+                ("assistant", "Employees may work remotely two days per week.", "policy"),
+            ],
+        )
+    ]
+
+
+def test_eligibility_subtopic_follow_up_uses_policy_history_and_retrieval(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    chunk = RetrievedChunk(
+        "Hybrid_Work_Policy_2024.pdf",
+        1,
+        "Eligibility",
+        0.82,
+        "Roles graded L4 and below are eligible for up to two remote days per week. Roles requiring physical access are excluded.",
+        "policy",
+    )
+    model = mock_generation(
+        monkeypatch,
+        [chunk],
+        AIMessage(content="Eligible roles at L4 and below may work remotely up to two days per week, except roles requiring physical access."),
+    )
+    retrieved: list[tuple[str, str]] = []
+
+    def capture_retrieval(agent: str, query: str) -> list[RetrievedChunk]:
+        retrieved.append((agent, query))
+        return [chunk]
+
+    monkeypatch.setattr(pipeline, "retrieve", capture_retrieval)
+    history = [
+        {"role": "user", "content": "Tell me about remote work", "agent": "hr"},
+        {
+            "role": "assistant",
+            "content": "Eligibility depends on role grade and physical access requirements.",
+            "agent": "policy",
+        },
+    ]
+
+    response = post_chat(
+        "tell about eligibility",
+        agent="hr",
+        conversation_history=history,
+    )
+
+    assert response["agent"] == "policy"
+    assert retrieved == [
+        ("policy", "Tell me about remote work tell about eligibility")
+    ]
+    assert response["sources"][0]["document"] == "Hybrid_Work_Policy_2024.pdf"
+    assert model.messages is not None
+    assert "Earlier Policy agent message" in str(model.messages)
+    assert "Roles graded L4 and below" in str(model.messages)
+
+
+def test_simple_way_follow_up_keeps_the_previous_topic_and_specialist() -> None:
+    from app.agents.router import resolve_question_agent
+
+    history = [
+        ("user", "Tell me about leaves", "hr"),
+        ("assistant", "Casual, sick, and earned leave have different rules.", "hr"),
+    ]
+
+    assert resolve_question_agent("is there any simple way", "policy", history) == "hr"
+    assert "Tell me about leaves" in pipeline._retrieval_topic_question(
+        "is there any simple way", history
+    )
+
+
+def test_prompt_labels_cross_agent_history_without_treating_it_as_evidence() -> None:
+    messages = pipeline.build_prompt(
+        "policy",
+        "Can I do that on Fridays?",
+        "[Document: Hybrid_Work_Policy.pdf]\nTwo remote days are permitted.",
+        [
+            ("assistant", "An earlier answer.", "hr"),
+            ("assistant", "Employees may work remotely two days per week.", "policy"),
+        ],
+    )
+
+    assert "Earlier HR agent message" in str(messages)
+    assert "Earlier Policy agent message" in str(messages)
+    assert "Conversation history helps resolve follow-ups but is not evidence" in messages[0].content
+
+
 def test_it_mfa_question_uses_documented_steps_and_escalation(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -816,14 +941,15 @@ def test_unrelated_low_confidence_matches_are_filtered(
     model = mock_generation(
         monkeypatch,
         sample_chunks(score=0.01),
-        AIMessage(content="This answer must not be used."),
+        AIMessage(content="Quantum entanglement is a physical phenomenon where particles share linked states."),
     )
 
     result = pipeline.run_rag("hr", "What is quantum entanglement?")
 
-    assert "couldn't find enough relevant information" in result.answer.lower()
+    assert "quantum entanglement" in result.answer.lower()
     assert result.sources == []
-    assert model.messages is None
+    assert model.messages is not None
+    assert "ordinary general-knowledge questions" in model.messages[0].content
 
 
 def test_chat_analytics_does_not_retain_raw_question(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -880,10 +1006,20 @@ def test_policy_overview_accepts_section_reference_and_keeps_sources_separate(
     assert "broad request for policy information" in str(model.messages).lower()
 
 
-@pytest.mark.parametrize("agent", ["hr", "policy"])
-def test_explicit_selected_agent_is_preserved_for_policy_keyword(
+@pytest.mark.parametrize(
+    ("selected_agent", "question", "expected_agent"),
+    [
+        ("hr", "give me info regarding policy", "policy"),
+        ("policy", "give me info regarding policy", "policy"),
+        ("hr", "what about remote work? can you explain that", "policy"),
+        ("policy", "how many sick leaves do I get?", "hr"),
+    ],
+)
+def test_clear_domain_intent_overrides_agent_selection(
     monkeypatch: pytest.MonkeyPatch,
-    agent: str,
+    selected_agent: str,
+    question: str,
+    expected_agent: str,
 ) -> None:
     mock_generation(
         monkeypatch,
@@ -891,9 +1027,9 @@ def test_explicit_selected_agent_is_preserved_for_policy_keyword(
         AIMessage(content="The retrieved document provides relevant guidance."),
     )
 
-    result = post_chat("give me info regarding policy", agent=agent)
+    result = post_chat(question, agent=selected_agent)
 
-    assert result["agent"] == agent
+    assert result["agent"] == expected_agent
 
 
 def test_omitted_agent_uses_intent_based_routing(
@@ -910,15 +1046,17 @@ def test_omitted_agent_uses_intent_based_routing(
     assert result["agent"] == "policy"
 
 
-def test_no_documents_returns_not_found_without_model_call(
+def test_no_documents_refuse_unspecified_company_policy_without_model_call(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     model = mock_generation(monkeypatch, [], AIMessage(content="fabricated"))
 
     result = pipeline.run_rag("hr", "What is the policy on sabbaticals?")
 
-    assert "couldn't find enough relevant information" in result.answer.lower()
+    assert "don't want to guess" in result.answer.lower()
+    assert "compliance" in result.answer.lower()
     assert result.sources == []
+    assert result.error_code == "insufficient_evidence"
     assert model.messages is None
 
 
@@ -1014,11 +1152,19 @@ def test_gemini_model_is_read_from_configuration(
     assert received["model"] == "gemini-3.8-flash"
 
 
-@pytest.mark.parametrize("agent", ["hr", "it", "policy"])
+@pytest.mark.parametrize(
+    ("agent", "question"),
+    [
+        ("hr", "How many casual leaves do I get?"),
+        ("it", "How do I set up VPM?"),
+        ("policy", "What is our code of conduct?"),
+    ],
+)
 def test_model_unavailable_is_safe_and_consistent_for_every_agent(
     monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
     agent: str,
+    question: str,
 ) -> None:
     class ModelUnavailable(Exception):
         status_code = 404
@@ -1035,7 +1181,7 @@ def test_model_unavailable_is_safe_and_consistent_for_every_agent(
     mock_generation(monkeypatch, sample_chunks(), ModelUnavailable())
 
     with caplog.at_level("WARNING", logger="app.rag.pipeline"):
-        result = post_chat("How do I set up VPM?", agent=agent)
+        result = post_chat(question, agent=agent)
 
     assert result["agent"] == agent
     assert result["error_code"] == "model_unavailable"
@@ -1588,3 +1734,114 @@ def test_unrelated_query_does_not_receive_leave_expansion_or_pass_cutoff(
 
     assert queries == ["What is quantum entanglement?"]
     assert chunks == []
+
+
+def test_contextual_follow_up_uses_last_responding_specialist() -> None:
+    from app.agents.router import resolve_question_agent
+
+    history = [
+        ("user", "What is the remote work policy?", "hr"),
+        ("assistant", "The Policy Agent says two days are allowed.", "policy"),
+    ]
+
+    assert resolve_question_agent(
+        "Can you simplify that?", "hr", history
+    ) == "policy"
+    assert resolve_question_agent(
+        "What about approval?", "hr", [
+            ("user", "Tell me regarding leaves", "hr"),
+            ("assistant", "Leave requests go through HR.", "hr"),
+        ]
+    ) == "hr"
+
+
+def test_rest_follow_up_simplifies_previous_hr_answer_with_retrieved_context(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    chunk = RetrievedChunk(
+        "Leave_Policy.docx", 2, "Leave", 0.82,
+        "Casual leave is 12 days per year; sick leave is 12 days. Requests need manager approval.",
+        "hr",
+    )
+    model = mock_generation(
+        monkeypatch,
+        [chunk],
+        AIMessage(content="You have 12 casual and 12 sick leave days each year. Your manager must approve a request."),
+    )
+    retrieval_inputs: list[tuple[str, str]] = []
+
+    def capture(agent: str, query: str) -> list[RetrievedChunk]:
+        retrieval_inputs.append((agent, query))
+        return [chunk]
+
+    monkeypatch.setattr(pipeline, "retrieve", capture)
+    history = [
+        {"role": "user", "content": "Tell me regarding leaves", "agent": "hr"},
+        {
+            "role": "assistant",
+            "content": "Casual leave is 12 days, sick leave is 12 days, earned leave has its own carry-forward rules, and submit through the HR portal.",
+            "agent": "hr",
+        },
+    ]
+
+    response = post_chat("Can you simplify that?", agent="hr", conversation_history=history)
+
+    assert response["answer"] == "You have 12 casual and 12 sick leave days each year. Your manager must approve a request."
+    assert retrieval_inputs[0][0] == "hr"
+    assert "Tell me regarding leaves" in retrieval_inputs[0][1]
+    assert model.messages is not None
+    assert "Casual leave is 12 days, sick leave is 12 days" in str(model.messages)
+
+
+def test_rest_short_follow_up_routes_to_prior_policy_specialist(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.api import routes
+    from app.rag.pipeline import RagResult
+
+    captured: list[str] = []
+
+    def capture(agent: str, question: str, _history: list[tuple] | None = None) -> RagResult:
+        captured.append(agent)
+        return RagResult("A shorter grounded summary.", agent, [], 1, "test")
+
+    monkeypatch.setattr(routes, "run_rag", capture)
+    history = [
+        {"role": "user", "content": "What is the remote work policy?", "agent": "hr"},
+        {"role": "assistant", "content": "Employees can work remotely under the hybrid policy.", "agent": "policy"},
+    ]
+
+    response = post_chat("Can you simplify that?", agent="hr", conversation_history=history)
+
+    assert captured == ["policy"]
+    assert response["agent"] == "policy"
+
+
+def test_rest_response_preserves_source_specialist_metadata(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.api import routes
+    from app.rag.pipeline import RagResult
+
+    monkeypatch.setattr(
+        routes,
+        "run_rag",
+        lambda agent, _question, _history=None: RagResult(
+            "Grounded response.",
+            agent,
+            [RetrievedChunk("Hybrid_Work_Policy_2024.pdf", 2, "Hybrid", 0.8, "Two days.", "policy")],
+            1,
+            "test",
+        ),
+    )
+
+    response = post_chat("What is remote work?", agent="policy")
+
+    assert response["sources"][0] == {
+        "document": "Hybrid_Work_Policy_2024.pdf",
+        "page": 2,
+        "section": "Hybrid",
+        "score": 0.8,
+        "snippet": "Two days.",
+        "agent": "policy",
+    }

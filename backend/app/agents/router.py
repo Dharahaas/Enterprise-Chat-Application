@@ -167,3 +167,74 @@ def classify_question(question: str, fallback: str = "hr") -> str:
     if scores[best] == 0:
         return fallback
     return best
+
+
+def classify_question_domains(question: str) -> list[str]:
+    """Return domains explicitly mentioned in a question, in specialist order."""
+    q = normalize_query(question).casefold()
+    return [
+        agent_id
+        for agent_id, phrases in KEYWORDS.items()
+        if any(re.search(rf"(?<!\w){re.escape(phrase)}(?!\w)", q) for phrase in phrases)
+    ]
+
+
+def is_contextual_follow_up(
+    question: str,
+    conversation_history: list[tuple[str, str] | tuple[str, str, str | None]] | None = None,
+) -> bool:
+    """Recognize the existing short follow-up forms used by the RAG pipeline."""
+    normalized = normalize_query(question).casefold().strip()
+    if re.search(
+        r"\b(?:any\s+(?:simple|simpler|easier)|simple|simpler|simplify|simplified|easier|what\s+if|what\s+about|"
+        r"where\s+(?:do|can)\s+i|how\s+about|that\s+(?:fails?|doesn't|does\s+not)|"
+        r"it\s+(?:fails?|doesn't|does\s+not)|contact\s+them|try\s+next)\b|"
+        r"\bhow\s+do\s+i\s+(?:do|start|continue)\s+that\b|"
+        r"\bwhat\s+happens?\s+(?:next|after\s+that)\b|"
+        r"\b(?:i\s+)?(?:need|want|prefer)\s+(?:instructions?\s+)?"
+        r"(?:for\s+)?(?:macos|windows|linux)\b|\bfor\s+(?:macos|windows|linux)\b",
+        normalized,
+    ) or re.fullmatch(r"(?:windows|mac(?:os)?|linux)[?.!]*", normalized):
+        return True
+
+    # A short phrase can name a subtopic from the preceding answer without
+    # repeating the original domain (for example, "tell about eligibility").
+    if not conversation_history or classify_question_domains(question):
+        return False
+    words = set(re.findall(r"[a-z0-9]+", normalized))
+    if len(words) > 8:
+        return False
+    stop_words = {
+        "a", "about", "an", "and", "are", "can", "could", "do", "for",
+        "give", "how", "i", "in", "is", "it", "me", "more", "of", "on",
+        "please", "pls", "tell", "the", "to", "what", "with", "you",
+    }
+    topic_words = words - stop_words
+    if not topic_words:
+        return False
+    previous_answer = next(
+        (turn[1] for turn in reversed(conversation_history) if turn[0] == "assistant"),
+        "",
+    )
+    answer_words = set(re.findall(r"[a-z0-9]+", normalize_query(previous_answer).casefold()))
+    return bool(topic_words & answer_words)
+
+
+def resolve_question_agent(
+    question: str,
+    fallback: str = "hr",
+    conversation_history: list[tuple[str, str] | tuple[str, str, str | None]] | None = None,
+) -> str:
+    """Keep short cross-agent follow-ups with the specialist that last answered."""
+    domains = classify_question_domains(question)
+    if domains:
+        return classify_question(question, fallback=fallback)
+    if is_contextual_follow_up(question, conversation_history) and conversation_history:
+        for turn in reversed(conversation_history):
+            if turn[0] == "assistant" and len(turn) > 2 and turn[2] in AGENTS:
+                return turn[2]
+            if turn[0] == "user":
+                prior_domains = classify_question_domains(turn[1])
+                if prior_domains:
+                    return classify_question(turn[1], fallback=fallback)
+    return classify_question(question, fallback=fallback)
