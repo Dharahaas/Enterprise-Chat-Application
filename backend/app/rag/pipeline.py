@@ -18,6 +18,7 @@ from app.agents.router import (
     is_contextual_follow_up,
     normalize_query,
 )
+from app.authz import chunk_permitted, current_access_context
 from app.config import settings
 from app.rag.embeddings import get_embeddings, measure_embedding_time
 from app.rag.llm import (
@@ -51,8 +52,8 @@ COMPANY_SCOPE_PATTERN = re.compile(
     re.IGNORECASE,
 )
 NO_RELEVANT_DOCUMENTS_MESSAGE = (
-    "I couldn't find that detail in the available {agent} documents, so I don't "
-    "want to guess. Please check with {team}."
+    "I couldn't find this information in the company documents. I don't want "
+    "to guess, so please check with {team}."
 )
 RETRIEVAL_ERROR_MESSAGE = (
     "I couldn't search the knowledge base right now. Please try again later."
@@ -295,7 +296,21 @@ def _preserve_procedural_details(
 
 
 def retrieve(agent_id: str, question: str) -> list[RetrievedChunk]:
-    """Retrieve, score, and deduplicate passages in the selected agent namespace."""
+    """Retrieve, score, and deduplicate passages in the selected agent namespace.
+
+    Every chunk is authorized against the current request's access context
+    before it can reach the prompt, the citations or the stream. Without a
+    verifiable context the retrieval fails closed and returns nothing.
+    """
+    access = current_access_context()
+    if access is None or not access.verified:
+        logger.warning(
+            "Knowledge retrieval refused: no verifiable document access context "
+            "agent=%s",
+            agent_id,
+        )
+        return []
+    denied_chunks = 0
     try:
         embedding_client_start = time.perf_counter()
         embeddings = get_embeddings()
@@ -342,6 +357,9 @@ def retrieve(agent_id: str, question: str) -> list[RetrievedChunk]:
             )
             for doc, distance in docs_with_distances:
                 metadata = doc.metadata or {}
+                if not chunk_permitted(metadata, access, agent_id):
+                    denied_chunks += 1
+                    continue
                 content = doc.page_content.strip()
                 if not content:
                     continue
@@ -385,6 +403,9 @@ def retrieve(agent_id: str, question: str) -> list[RetrievedChunk]:
             )
             for doc, distance in docs_with_distances:
                 metadata = doc.metadata or {}
+                if not chunk_permitted(metadata, access, agent_id):
+                    denied_chunks += 1
+                    continue
                 content = doc.page_content.strip()
                 if not content:
                     continue
@@ -426,14 +447,15 @@ def retrieve(agent_id: str, question: str) -> list[RetrievedChunk]:
         )
         logger.info(
             "Retrieval candidates request_id=%s agent=%s collection=%s queries=%d "
-            "candidate_count=%d kept_count=%d retrieval_ms=%d metric=%s minimum_score=%.2f "
-            "sources_scores=%s",
+            "candidate_count=%d kept_count=%d denied_count=%d retrieval_ms=%d metric=%s "
+            "minimum_score=%.2f sources_scores=%s",
             current_request_id(),
             agent_id,
             collection,
             len(queries),
             len(ranked_candidates),
             len(chunks),
+            denied_chunks,
             retrieval_elapsed_ms,
             metric,
             MIN_RELEVANCE_SCORE,
@@ -663,6 +685,9 @@ def run_rag(
             [],
             start,
             provider="none",
+            # Distinct from "insufficient_evidence": the knowledge base could not
+            # be searched at all, so nothing was proven absent.
+            error_code="retrieval_error",
         )
 
     retrieval_elapsed_ms = int((time.perf_counter() - retrieval_start) * 1000)
@@ -874,7 +899,14 @@ def run_rag_stream(
             span.metadata["chunks_found"] = len(chunks)
             span.metadata["chunks_used"] = len(top_chunks)
     except RetrievalError:
-        return _result(RETRIEVAL_ERROR_MESSAGE, agent_id, [], start, provider="none")
+        return _result(
+            RETRIEVAL_ERROR_MESSAGE,
+            agent_id,
+            [],
+            start,
+            provider="none",
+            error_code="retrieval_error",
+        )
 
     if cancelled.is_set():
         return _result("", agent_id, top_chunks, start, error_code="cancelled")

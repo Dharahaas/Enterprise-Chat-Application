@@ -69,6 +69,56 @@ class DocumentUploadResponse(BaseModel):
     message: str
 
 
+# ---------- Feedback (Phase 4) ----------
+
+class FeedbackRequest(BaseModel):
+    rating: Literal["positive", "negative"]
+    # Stable, client-derived key identifying the answer being rated. It never
+    # carries conversation content beyond what is validated below.
+    answer_key: str = Field(..., min_length=8, max_length=128, pattern=r"^[A-Za-z0-9_-]+$")
+    question: str = Field(..., min_length=1, max_length=300)
+    agent: Literal["hr", "it", "policy", "auto"] = "auto"
+    reason: (
+        Literal[
+            "incorrect_answer",
+            "missing_information",
+            "irrelevant_sources",
+            "outdated_document",
+            "other",
+        ]
+        | None
+    ) = None
+    source_status: Literal["sources", "no_sources", "retrieval_error", "error"] = "sources"
+
+
+class FeedbackResponse(BaseModel):
+    id: str
+    rating: str
+    reason: str | None
+    changed: bool
+    updated_at: str
+
+
+class KnowledgeGap(BaseModel):
+    question: str
+    agent: str
+    count: int
+    top_reason: str
+    reasons: dict[str, int]
+
+
+class FeedbackSummary(BaseModel):
+    total_records: int
+    total_positive: int
+    total_negative: int
+    negative_reasons: dict[str, int]
+    feedback_by_agent: dict[str, dict[str, int]]
+    feedback_by_day: dict[str, dict[str, int]]
+    knowledge_gaps: list[KnowledgeGap]
+    no_source_questions: int
+    unanswered_questions: int
+
+
 # ---------- Analytics ----------
 
 class AnalyticsResponse(BaseModel):
@@ -81,6 +131,7 @@ class AnalyticsResponse(BaseModel):
     queries_by_agent: dict[str, int]
     queries_by_day: dict[str, int]
     ragas_metrics: dict[str, dict[str, float]]
+    feedback: FeedbackSummary | None = None
 
 
 # ---------- Health ----------

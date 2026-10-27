@@ -220,6 +220,32 @@ def is_contextual_follow_up(
     return bool(topic_words & answer_words)
 
 
+CLARIFICATION_MESSAGE = (
+    "I'm not sure which area this question covers. Could you mention whether it "
+    "is about HR (leave, payroll, benefits), IT (passwords, VPN, devices), or "
+    "company policies? You can also choose a specialist and ask again."
+)
+
+
+def is_ambiguous_question(
+    question: str,
+    conversation_history: list[tuple[str, str] | tuple[str, str, str | None]] | None = None,
+) -> bool:
+    """True when nothing identifies the domain and no specialist is implied.
+
+    Callers use this only when the request carries no explicit agent hint, so
+    clearly domain questions, recognized social turns and contextual follow-ups
+    keep the existing classifier and specialist-retention behaviour.
+    """
+    if classify_conversation_intent(question):
+        return False
+    if classify_question_domains(question):
+        return False
+    if conversation_history and is_contextual_follow_up(question, conversation_history):
+        return False
+    return True
+
+
 def resolve_question_agent(
     question: str,
     fallback: str = "hr",

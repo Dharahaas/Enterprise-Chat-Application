@@ -83,7 +83,7 @@
         return `
           <tr>
             <td><div class="document-name-cell">
-              <span class="document-file-mark ${escapeHtml(extension.toLowerCase())}">${escapeHtml(extension.slice(0, 4))}</span>
+              <span class="document-file-mark ${escapeHtml(extension.toLowerCase())}" aria-hidden="true">${escapeHtml(extension.slice(0, 4))}</span>
               <span class="document-name-wrap"><strong>${escapeHtml(visibleName)}</strong><small>${escapeHtml(agent?.name || document.agent)}</small></span>
             </div></td>
             <td><span class="agent-label ${escapeHtml(document.agent)}"><span class="agent-dot ${escapeHtml(document.agent)}"></span>${escapeHtml(agent?.name || document.agent)}</span></td>

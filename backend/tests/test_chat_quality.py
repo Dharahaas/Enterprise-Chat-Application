@@ -796,7 +796,7 @@ def test_it_missing_procedure_falls_back_to_documented_support_contact(
                     (
                         Document(
                             page_content="Contact the IT desk at ext. 4500.",
-                            metadata={"source": "IT_Support_Guide.txt"},
+                            metadata={"source": "IT_Support_Guide.txt", "agent": "it"},
                         ),
                         0.2,
                     )
@@ -805,7 +805,7 @@ def test_it_missing_procedure_falls_back_to_documented_support_contact(
                 (
                     Document(
                         page_content="Unrelated software inventory.",
-                        metadata={"source": "Asset_Policy.docx"},
+                        metadata={"source": "Asset_Policy.docx", "agent": "it"},
                     ),
                     1.7,
                 )
@@ -1492,10 +1492,10 @@ def test_retrieval_uses_collection_metric_filters_irrelevant_and_deduplicates(
 
     duplicate = "Casual leave is 12 days each calendar year."
     results = [
-        (Document(page_content=duplicate, metadata={"source": "Leave_Policy.docx"}), 0.2),
-        (Document(page_content=duplicate, metadata={"source": "Leave_Policy.docx"}), 0.3),
+        (Document(page_content=duplicate, metadata={"source": "Leave_Policy.docx", "agent": "hr"}), 0.2),
+        (Document(page_content=duplicate, metadata={"source": "Leave_Policy.docx", "agent": "hr"}), 0.3),
         (
-            Document(page_content="Irrelevant payroll details.", metadata={"source": "Payroll.docx"}),
+            Document(page_content="Irrelevant payroll details.", metadata={"source": "Payroll.docx", "agent": "hr"}),
             1.8,
         ),
     ]
@@ -1527,7 +1527,7 @@ def test_broad_leave_request_expands_query_and_keeps_relevant_sources(
             (
                 Document(
                     page_content="Overview of employee leave categories.",
-                    metadata={"source": "HR_Policy_Manual_2024.pdf", "page": 1},
+                    metadata={"source": "HR_Policy_Manual_2024.pdf", "agent": "hr", "page": 1},
                 ),
                 1.4192,
             )
@@ -1536,14 +1536,14 @@ def test_broad_leave_request_expands_query_and_keeps_relevant_sources(
             (
                 Document(
                     page_content="Casual leave: 12 days per calendar year.",
-                    metadata={"source": "Leave_Policy.docx", "section": "3.1"},
+                    metadata={"source": "Leave_Policy.docx", "agent": "hr", "section": "3.1"},
                 ),
                 0.954,
             ),
             (
                 Document(
                     page_content="Overview of employee leave categories.",
-                    metadata={"source": "HR_Policy_Manual_2024.pdf", "page": 1},
+                    metadata={"source": "HR_Policy_Manual_2024.pdf", "agent": "hr", "page": 1},
                 ),
                 0.954,
             ),
@@ -1587,7 +1587,7 @@ def test_sick_leave_extension_retrieves_policy_and_documented_alternatives(
             (
                 Document(
                     page_content="Employees receive 12 sick leaves per calendar year.",
-                    metadata={"source": "HR_Policy_Manual_2024.pdf", "section": "1"},
+                    metadata={"source": "HR_Policy_Manual_2024.pdf", "agent": "hr", "section": "1"},
                 ),
                 0.8,
             )
@@ -1596,7 +1596,7 @@ def test_sick_leave_extension_retrieves_policy_and_documented_alternatives(
             (
                 Document(
                     page_content="Medical certificate required for 3+ consecutive sick-leave days.",
-                    metadata={"source": "Leave_Policy.docx", "section": "3.2"},
+                    metadata={"source": "Leave_Policy.docx", "agent": "hr", "section": "3.2"},
                 ),
                 0.8,
             )
@@ -1605,7 +1605,7 @@ def test_sick_leave_extension_retrieves_policy_and_documented_alternatives(
             (
                 Document(
                     page_content="15 earned leave days per calendar year.",
-                    metadata={"source": "Leave_Policy.docx", "section": "3.3"},
+                    metadata={"source": "Leave_Policy.docx", "agent": "hr", "section": "3.3"},
                 ),
                 0.8,
             )
@@ -1654,7 +1654,7 @@ def test_general_leave_extension_retrieves_earned_leave_alternative(
                         "Employees are entitled to 12 Casual Leaves, 12 Sick Leaves, "
                         "and 15 Earned Leaves per calendar year."
                     ),
-                    metadata={"source": "HR_Policy_Manual_2024.pdf", "section": "1"},
+                    metadata={"source": "HR_Policy_Manual_2024.pdf", "agent": "hr", "section": "1"},
                 ),
                 0.8,
             )
@@ -1663,7 +1663,7 @@ def test_general_leave_extension_retrieves_earned_leave_alternative(
             (
                 Document(
                     page_content="Casual and sick leaves cannot be carried forward.",
-                    metadata={"source": "HR_Policy_Manual_2024.pdf", "section": "1"},
+                    metadata={"source": "HR_Policy_Manual_2024.pdf", "agent": "hr", "section": "1"},
                 ),
                 0.8,
             )
@@ -1674,7 +1674,7 @@ def test_general_leave_extension_retrieves_earned_leave_alternative(
                     page_content=(
                         "15 earned leave days per year; up to 45 days can be carried forward."
                     ),
-                    metadata={"source": "Leave_Policy.docx", "section": "3.3"},
+                    metadata={"source": "Leave_Policy.docx", "agent": "hr", "section": "3.3"},
                 ),
                 0.8,
             )
@@ -1720,7 +1720,7 @@ def test_unrelated_query_does_not_receive_leave_expansion_or_pass_cutoff(
                 (
                     Document(
                         page_content="Leave policy details.",
-                        metadata={"source": "Leave_Policy.docx"},
+                        metadata={"source": "Leave_Policy.docx", "agent": "hr"},
                     ),
                     1.39,
                 )

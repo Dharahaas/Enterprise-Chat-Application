@@ -49,6 +49,91 @@
       `).join('')}</div>`;
     }
 
+    function reasonLabelForAnalytics(reason) {
+      const labels = {
+        incorrect_answer: 'Incorrect answer',
+        missing_information: 'Missing information',
+        irrelevant_sources: 'Irrelevant sources',
+        outdated_document: 'Outdated document',
+        other: 'Other',
+        unspecified: 'No reason given',
+      };
+      return labels[reason] || String(reason || 'Unspecified');
+    }
+
+    function renderFeedbackTrend(days) {
+      const entries = Object.entries(days || {})
+        .sort(([left], [right]) => left.localeCompare(right))
+        .slice(-14);
+      if (!entries.length) return '<div class="chart-empty">No feedback has been recorded yet.</div>';
+      return `<ul class="feedback-trend">${entries.map(([date, counts]) => `
+        <li>
+          <span class="feedback-trend-date">${escapeHtml(date)}</span>
+          <span class="feedback-trend-value positive">${Number(counts?.positive) || 0} helpful</span>
+          <span class="feedback-trend-value negative">${Number(counts?.negative) || 0} not helpful</span>
+        </li>
+      `).join('')}</ul>`;
+    }
+
+    function renderFeedbackPanel(feedback) {
+      if (!feedback) return '';
+      const reasons = Object.entries(feedback.negative_reasons || {});
+      const reasonMax = Math.max(...reasons.map(([, count]) => Number(count) || 0), 1);
+      const topics = ['hr', 'it', 'policy'].map(id => {
+        const bucket = feedback.feedback_by_agent?.[id] || {};
+        return {
+          id,
+          name: AGENTS.find(agent => agent.id === id)?.name || id,
+          positive: Number(bucket.positive) || 0,
+          negative: Number(bucket.negative) || 0,
+        };
+      });
+      const topicMax = Math.max(...topics.map(item => item.positive + item.negative), 1);
+      const gaps = Array.isArray(feedback.knowledge_gaps) ? feedback.knowledge_gaps : [];
+      return `
+        <section class="analytics-highlights">
+          <article class="metric-card"><span class="metric-label">Helpful votes</span><strong>${Number(feedback.total_positive).toLocaleString()}</strong><span class="metric-context">Thumbs-up ratings received</span></article>
+          <article class="metric-card"><span class="metric-label">Not-helpful votes</span><strong>${Number(feedback.total_negative).toLocaleString()}</strong><span class="metric-context">Thumbs-down ratings received</span></article>
+          <article class="metric-card"><span class="metric-label">Questions without sources</span><strong>${Number(feedback.no_source_questions).toLocaleString()}</strong><span class="metric-context">Recorded requests this week</span></article>
+          <article class="metric-card"><span class="metric-label">Unanswered questions</span><strong>${Number(feedback.unanswered_questions).toLocaleString()}</strong><span class="metric-context">Retrieval or provider failures</span></article>
+        </section>
+        <section class="analytics-grid">
+          <article class="analytics-panel">
+            <div class="panel-heading"><div><h2>Negative feedback reasons</h2><p>Why answers were rated unhelpful</p></div><span class="panel-unit">RATINGS</span></div>
+            ${reasons.length ? `<div class="agent-activity">${reasons.map(([reason, count]) => `
+              <div class="agent-activity-row">
+                <div class="agent-activity-label"><span>${escapeHtml(reasonLabelForAnalytics(reason))}</span><strong>${Number(count).toLocaleString()}</strong></div>
+                <div class="activity-track"><span class="activity-fill" style="width:${(Number(count) || 0) / reasonMax * 100}%"></span></div>
+              </div>
+            `).join('')}</div>` : '<div class="chart-empty">No negative feedback has been recorded yet.</div>'}
+          </article>
+          <article class="analytics-panel">
+            <div class="panel-heading"><div><h2>Feedback by topic</h2><p>Helpful and unhelpful votes by HR, IT and Policy</p></div><span class="panel-unit">RATINGS</span></div>
+            <div class="agent-activity">${topics.map(item => `
+              <div class="agent-activity-row">
+                <div class="agent-activity-label"><span class="agent-dot ${item.id}"></span><span>${escapeHtml(item.name)}</span><strong>${(item.positive + item.negative).toLocaleString()}</strong></div>
+                <div class="activity-track"><span class="activity-fill ${item.id}" style="width:${(item.positive + item.negative) / topicMax * 100}%"></span></div>
+              </div>
+            `).join('')}</div>
+          </article>
+        </section>
+        <section class="analytics-panel feedback-panel">
+          <div class="panel-heading"><div><h2>Reported knowledge gaps</h2><p>Questions most often rated unhelpful</p></div><span class="panel-unit">TOP ${gaps.length}</span></div>
+          ${gaps.length ? `<div class="gap-list">${gaps.map(gap => `
+            <div class="gap-row">
+              <span class="agent-label ${escapeHtml(gap.agent)}"><span class="agent-dot ${escapeHtml(gap.agent)}"></span>${escapeHtml(gap.agent)}</span>
+              <span class="gap-question">${escapeHtml(gap.question)}</span>
+              <span class="gap-meta">${Number(gap.count)} report${Number(gap.count) === 1 ? '' : 's'} · ${escapeHtml(reasonLabelForAnalytics(gap.top_reason))}</span>
+            </div>
+          `).join('')}</div>` : '<div class="chart-empty">No unhelpful answers have been reported yet.</div>'}
+        </section>
+        <section class="analytics-panel feedback-panel">
+          <div class="panel-heading"><div><h2>Feedback trend</h2><p>Helpful and unhelpful ratings by day</p></div><span class="panel-unit">14 DAYS</span></div>
+          ${renderFeedbackTrend(feedback.feedback_by_day)}
+        </section>
+      `;
+    }
+
     function renderEvaluationSummary(report) {
       if (!report || !Array.isArray(report.results)) {
         return '<div class="evaluation-empty">No completed evaluation is available. Run an evaluation to view its measured results.</div>';
@@ -101,6 +186,7 @@
             <p>Activity and response timings cover up to the last 1,000 requests handled by this process. The history resets when the backend restarts.</p>
           </section>
         `}
+        ${renderFeedbackPanel(analyticsData.feedback)}
         <section class="evaluation-panel">
           <div class="panel-heading"><div><h2>Retrieval evaluation</h2><p>Metrics from the latest completed evaluation run</p></div><div class="evaluation-actions"><button type="button" class="secondary-button" onclick="loadLatestEvaluation()">Refresh result</button><button id="runEvalButton" type="button" class="primary-button" onclick="runEvaluation()">Run evaluation</button></div></div>
           <div id="evaluationResult">${renderEvaluationSummary(latestEvaluation)}</div>

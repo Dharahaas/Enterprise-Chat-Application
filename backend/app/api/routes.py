@@ -32,18 +32,24 @@ from fastapi.responses import JSONResponse, PlainTextResponse
 from starlette.concurrency import run_in_threadpool
 
 from app.agents.router import (
+    CLARIFICATION_MESSAGE,
     classify_conversation_intent,
+    classify_question_domains,
+    is_ambiguous_question,
     resolve_question_agent,
     conversation_reply,
     normalize_query,
 )
 from app.auth import (
     SESSION_COOKIE,
+    AuthenticatedUser,
     current_csrf_token,
     get_session_user,
     require_admin,
     require_csrf,
 )
+from app.authz import access_context_for, reset_access_context, set_access_context
+from app.feedback import aggregate_feedback, record_feedback
 from app.config import is_llm_enabled, is_openai_enabled, settings
 from app.metrics import metrics
 from app.models import (
@@ -53,6 +59,9 @@ from app.models import (
     DocumentInfo,
     DocumentListResponse,
     DocumentUploadResponse,
+    FeedbackRequest,
+    FeedbackResponse,
+    FeedbackSummary,
     HealthResponse,
     SourceChunk,
 )
@@ -117,8 +126,31 @@ def llm_status() -> dict[str, str | bool | None]:
 
 # ---------- Chat ----------
 
-@router.post("/chat", response_model=ChatResponse, dependencies=[Depends(require_csrf)])
-def chat(req: ChatRequest) -> ChatResponse:
+def _query_outcome(result: RagResult) -> str:
+    """Classify how a logged query ended, without recording any content."""
+    if result.error_code == "insufficient_evidence":
+        return "no_evidence"
+    if result.error_code and result.error_code != "cancelled":
+        return "failed"
+    if result.llm_provider == "none" and not result.sources:
+        return "conversation"
+    return "answered"
+
+
+@router.post("/chat", response_model=ChatResponse)
+def chat(
+    req: ChatRequest,
+    user: AuthenticatedUser = Depends(require_csrf),
+) -> ChatResponse:
+    """Answer a chat request with document access enforced for this session."""
+    access_token = set_access_context(access_context_for(user))
+    try:
+        return _chat(req)
+    finally:
+        reset_access_context(access_token)
+
+
+def _chat(req: ChatRequest) -> ChatResponse:
     global _LLM_LAST_SUCCESS_AT
     """Handle simple conversation locally; use RAG for knowledge questions."""
     start = perf_counter()
@@ -131,7 +163,22 @@ def chat(req: ChatRequest) -> ChatResponse:
         question, fallback=req.agent or "hr", conversation_history=history
     )
     intent = classify_conversation_intent(question)
-    if intent:
+    # Automatic mode (no explicit agent hint) with a question that names no
+    # domain and is not a contextual follow-up: ask instead of forcing HR.
+    clarify = (
+        intent is None
+        and req.agent is None
+        and is_ambiguous_question(question, history)
+    )
+    if clarify:
+        result = RagResult(
+            answer=CLARIFICATION_MESSAGE,
+            agent="",
+            sources=[],
+            latency_ms=int((perf_counter() - start) * 1000),
+            llm_provider="none",
+        )
+    elif intent:
         result = RagResult(
             answer=conversation_reply(intent),
             agent=resolved_agent_id,
@@ -158,7 +205,8 @@ def chat(req: ChatRequest) -> ChatResponse:
         _LLM_LAST_SUCCESS_AT = datetime.now(timezone.utc).isoformat()
     logger.info(
         "Chat request complete request_id=%s selected_agent=%s resolved_agent=%s "
-        "responding_agent=%s history_messages=%d request_ms=%d rag_ms=%d",
+        "responding_agent=%s history_messages=%d request_ms=%d rag_ms=%d "
+        "clarification=%s",
         current_request_id(),
         req.agent or "auto",
         resolved_agent_id,
@@ -166,22 +214,26 @@ def chat(req: ChatRequest) -> ChatResponse:
         len(req.conversation_history),
         int((perf_counter() - start) * 1000),
         result.latency_ms,
+        clarify,
     )
 
 
-    # Log for analytics + metrics
-    with _QUERY_LOG_LOCK:
-        _QUERY_LOG.append(
-            {
-                "agent": agent_id,
-                "latency_ms": result.latency_ms,
-                "sources_count": len(result.sources),
-                "timestamp": datetime.now(timezone.utc).isoformat(),
-            }
-        )
-    metrics.inc(f"chat_queries_total{{agent=\"{agent_id}\"}}")
-    metrics.inc(f"chat_chunks_retrieved_total{{agent=\"{agent_id}\"}}", len(result.sources))
-    metrics.observe(f"chat_latency_ms{{agent=\"{agent_id}\"}}", result.latency_ms)
+    # A clarification is not a knowledge query, so it stays out of the
+    # analytics history and the per-agent metrics.
+    if not clarify:
+        with _QUERY_LOG_LOCK:
+            _QUERY_LOG.append(
+                {
+                    "agent": agent_id,
+                    "latency_ms": result.latency_ms,
+                    "sources_count": len(result.sources),
+                    "outcome": _query_outcome(result),
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                }
+            )
+        metrics.inc(f"chat_queries_total{{agent=\"{agent_id}\"}}")
+        metrics.inc(f"chat_chunks_retrieved_total{{agent=\"{agent_id}\"}}", len(result.sources))
+        metrics.observe(f"chat_latency_ms{{agent=\"{agent_id}\"}}", result.latency_ms)
 
     return ChatResponse(
         answer=result.answer,
@@ -229,6 +281,9 @@ async def chat_websocket(websocket: WebSocket) -> None:
         return
 
     await websocket.accept()
+    # Document permissions are derived from this session only and apply to the
+    # whole stream (routing, retrieval, citations and follow-up rewrites).
+    access_token = set_access_context(access_context_for(session))
     try:
         raw = await asyncio.wait_for(websocket.receive(), timeout=10)
         raw_text = raw.get("text")
@@ -289,6 +344,13 @@ async def chat_websocket(websocket: WebSocket) -> None:
                 fallback=request.agent or "hr",
                 conversation_history=history_for_routing,
             )
+            # Automatic mode (no explicit agent hint) with a question that names
+            # no domain and is not a contextual follow-up: ask instead of HR.
+            clarify = (
+                classify_conversation_intent(question) is None
+                and request.agent is None
+                and is_ambiguous_question(question, history_for_routing)
+            )
             conversation_id = request.conversation_id or str(uuid.uuid4())
             await websocket.send_json({
                 "v": 1, "type": "start", "request_id": request_id,
@@ -300,7 +362,7 @@ async def chat_websocket(websocket: WebSocket) -> None:
             })
             await websocket.send_json({
                 "v": 1, "type": "status", "request_id": request_id,
-                "payload": {"stage": "routing", "agent": resolved_agent},
+                "payload": {"stage": "routing", "agent": "" if clarify else resolved_agent},
             })
 
             async def listen_for_cancel() -> None:
@@ -335,7 +397,12 @@ async def chat_websocket(websocket: WebSocket) -> None:
 
             async def execute() -> None:
                 try:
-                    if classify_conversation_intent(question):
+                    if clarify:
+                        result = RagResult(
+                            answer=CLARIFICATION_MESSAGE, agent="",
+                            sources=[], latency_ms=0, llm_provider="none",
+                        )
+                    elif classify_conversation_intent(question):
                         intent = classify_conversation_intent(question)
                         result = RagResult(
                             answer=conversation_reply(intent), agent=resolved_agent,
@@ -489,6 +556,7 @@ async def chat_websocket(websocket: WebSocket) -> None:
                     pass
             with _ACTIVE_WS_USERS_LOCK:
                 _ACTIVE_WS_USERS.discard(session.username)
+            reset_access_context(access_token)
             reset_request_id(request_context_token)
     except (asyncio.TimeoutError, WebSocketDisconnect):
         try:
@@ -604,6 +672,49 @@ def remove_document(agent: str, doc_name: str) -> dict:
     return {"deleted_chunks": deleted, "agent": agent, "document": doc_name}
 
 
+# ---------- Feedback (Phase 4) ----------
+
+@router.post("/feedback", response_model=FeedbackResponse, status_code=201)
+def submit_feedback(
+    payload: FeedbackRequest,
+    user: AuthenticatedUser = Depends(require_csrf),
+) -> FeedbackResponse:
+    """Record one user's rating for one answer (upsert, never duplicated)."""
+    if payload.reason is not None and payload.rating != "negative":
+        raise HTTPException(
+            status_code=400,
+            detail="A reason applies to negative feedback only.",
+        )
+    # Topic is detected server-side from the question; the client value is only
+    # a fallback when the question names no single department.
+    domains = classify_question_domains(payload.question)
+    if len(domains) == 1:
+        agent = domains[0]
+    elif payload.agent in {"hr", "it", "policy"}:
+        agent = payload.agent
+    else:
+        agent = "auto"
+    try:
+        record, changed = record_feedback(
+            username=user.username,
+            answer_key=payload.answer_key,
+            rating=payload.rating,
+            reason=payload.reason,
+            agent=agent,
+            question=payload.question,
+            source_status=payload.source_status,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return FeedbackResponse(
+        id=record["id"],
+        rating=record["rating"],
+        reason=record["reason"],
+        changed=changed,
+        updated_at=record["updated_at"],
+    )
+
+
 # ---------- Analytics ----------
 
 @router.get(
@@ -646,6 +757,36 @@ def analytics() -> AnalyticsResponse:
         queries_by_agent=by_agent,
         queries_by_day=by_day,
         ragas_metrics=_get_ragas_metrics(),
+        feedback=_feedback_summary(recent_queries),
+    )
+
+
+def _feedback_summary(recent_queries: list[dict]) -> FeedbackSummary:
+    """Feedback aggregates plus no-source/unanswered question counts.
+
+    Feedback rows are already de-identified: aggregates never include the
+    rating user, assistant answers or full conversation history.
+    """
+    aggregates = aggregate_feedback()
+    no_source_questions = sum(
+        1
+        for query in recent_queries
+        if query.get("sources_count", 0) == 0
+        and query.get("outcome") != "conversation"
+    )
+    unanswered_questions = sum(
+        1 for query in recent_queries if query.get("outcome") == "failed"
+    )
+    return FeedbackSummary(
+        total_records=aggregates["total_records"],
+        total_positive=aggregates["total_positive"],
+        total_negative=aggregates["total_negative"],
+        negative_reasons=aggregates["negative_reasons"],
+        feedback_by_agent=aggregates["feedback_by_agent"],
+        feedback_by_day=aggregates["feedback_by_day"],
+        knowledge_gaps=aggregates["knowledge_gaps"],
+        no_source_questions=no_source_questions,
+        unanswered_questions=unanswered_questions,
     )
 
 

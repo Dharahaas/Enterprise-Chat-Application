@@ -206,11 +206,13 @@ const API = (() => {
           : `${Date.now()}-${Math.random().toString(36).slice(2)}`;
         const socket = new WebSocket(endpoint);
         let settled = false;
-        const fail = message => {
+        const fail = (message, code) => {
           if (settled) return;
           settled = true;
           socket.close();
-          reject(new Error(message));
+          const error = new Error(message);
+          if (code) error.code = code;
+          reject(error);
         };
         socket.addEventListener('open', () => {
           socket.send(JSON.stringify({
@@ -248,7 +250,10 @@ const API = (() => {
             });
             socket.close();
           } else if (message.type === 'error') {
-            fail(message.error?.message || 'The assistant could not complete this request.');
+            fail(
+              message.error?.message || 'The assistant could not complete this request.',
+              message.error?.code,
+            );
           } else if (message.type === 'cancel') {
             fail('The response was cancelled.');
           }
@@ -259,6 +264,11 @@ const API = (() => {
         });
       });
     },
+    submitFeedback: payload =>
+      request('/api/feedback', {
+        method: 'POST',
+        body: JSON.stringify(payload),
+      }),
     listDocuments: () => request('/api/documents'),
     uploadDocument: (file, agent) => {
       const fd = new FormData();
@@ -352,6 +362,40 @@ function isDemoAdminUser(user) {
   return user?.role === 'admin' && user.username === 'demo-admin@demo.invalid';
 }
 
+/* ---------- Personalized greeting (Phase 5) ---------- */
+
+// Display name comes from the session profile, never from hardcoded text.
+// Shared/public identities are never personalized.
+function greetingDisplayName(user) {
+  const username = typeof user?.username === 'string' ? user.username.trim() : '';
+  if (!username) return '';
+  if (isDemoAdminUser(user) || username === 'demo-employee@demo.invalid') return '';
+  const localPart = username.includes('@')
+    ? username.slice(0, username.indexOf('@'))
+    : username;
+  return localPart.slice(0, 40);
+}
+
+function timeOfDayGreeting(date) {
+  try {
+    const hour = (date instanceof Date ? date : new Date()).getHours();
+    if (Number.isFinite(hour) && hour >= 0 && hour < 24) {
+      if (hour < 12) return 'Good morning';
+      if (hour < 17) return 'Good afternoon';
+      return 'Good evening';
+    }
+  } catch (_) {
+    // Unavailable clock or time zone → generic fallback below.
+  }
+  return 'Good day';
+}
+
+function personalizedGreeting(user, date) {
+  const part = timeOfDayGreeting(date);
+  const name = greetingDisplayName(user);
+  return name ? `${part}, ${name}` : `${part}.`;
+}
+
 function homePageForUser(user) {
   return 'portal.html';
 }
@@ -386,7 +430,7 @@ function renderSidebar(activePage) {
   return `
     <aside class="sidebar" id="appSidebar" aria-label="Primary navigation">
       <div class="sidebar-brand">
-        <div class="brand-mark">${APP.short.charAt(0)}</div>
+        <div class="brand-mark" aria-hidden="true">${APP.short.charAt(0)}</div>
         <div>
           <div class="brand-name">${APP.name}</div>
           <div class="brand-sub">EMPLOYEE KNOWLEDGE PORTAL</div>
@@ -410,7 +454,7 @@ function renderSidebar(activePage) {
       </nav>
       <div class="sidebar-footer">
         <button class="user-chip" type="button" onclick="logout()" title="Sign out">
-          <div class="user-avatar">${escapeHTML((user.username || 'U').charAt(0).toUpperCase())}</div>
+          <div class="user-avatar" aria-hidden="true">${escapeHTML((user.username || 'U').charAt(0).toUpperCase())}</div>
           <div class="user-info">
             <div class="user-name">${escapeHTML(user.username || 'User')}</div>
             <div class="user-id">${escapeHTML(user.role || 'employee')} · Sign out</div>
@@ -471,11 +515,12 @@ async function mountShell(activePage, title, breadcrumb, mainContent, headerActi
   if (!user) return;
 
   document.body.innerHTML = `
+    <a class="skip-link" href="#main-content">Skip to content</a>
     <div class="app-shell">
       <button class="sidebar-backdrop" type="button" aria-label="Close navigation" onclick="toggleSidebar(false)"></button>
       ${renderSidebar(activePage)}
       ${renderHeader(title, breadcrumb, headerActions)}
-      <main class="main">
+      <main class="main" id="main-content" tabindex="-1">
         ${mainContent}
       </main>
     </div>

@@ -19,6 +19,7 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 
+from app.authz import reset_access_context, service_context, set_access_context
 from app.rag.pipeline import run_rag
 
 
@@ -317,7 +318,14 @@ def run_eval(
     results: list[EvalResult] = []
     for i, q in enumerate(eval_set):
         try:
-            rag_result = run_rag(q.agent, q.question)
+            # Evaluation runs without an end user: it uses the explicit service
+            # principal so retrieval authorization is still enforced (an unset
+            # context would fail closed and retrieve nothing).
+            access_token = set_access_context(service_context())
+            try:
+                rag_result = run_rag(q.agent, q.question)
+            finally:
+                reset_access_context(access_token)
             answer = rag_result.answer
             retrieved = [s.document for s in rag_result.sources]
             latency_ms = rag_result.latency_ms

@@ -14,14 +14,58 @@
   <script>
     const chatParams = new URLSearchParams(location.search);
     const embeddedMode = chatParams.get('embedded') === '1';
-    const requestedAgentId = chatParams.get('agent');
-    let activeAgent = AGENTS.find(agent => agent.id === requestedAgentId) || AGENTS[0];
+    let activeAgent = resolveRequestedAgent(chatParams, AGENTS);
+
+    // A general entry point (no ?agent= and no ?topic=) starts in automatic
+    // mode: the backend classifier picks HR, IT or Policy for each question, so
+    // no specialist is preselected here. This view object is local to this page
+    // and is deliberately NOT added to the shared AGENTS list.
+    const AUTOMATIC_ASSISTANT = {
+      id: null,
+      name: 'Ask Cathy',
+      desc: 'Automatic HR, IT and Policy routing',
+      initial: 'C',
+      placeholder: 'Ask anything about HR, IT or company policies…',
+      suggested: [
+        { title: 'Leave days', sub: 'How many leave days do I have?' },
+        { title: 'VPN trouble', sub: 'My VPN is not connecting.' },
+        { title: 'Work from home', sub: 'What is the work-from-home policy?' },
+        { title: 'Password reset', sub: 'How do I reset my password?' },
+      ],
+    };
+
+    // Portal quick links open the assistant with a topic routing hint
+    // (chat.html?topic=hr|it|policy). `agent` stays the existing parameter so
+    // sidebar links, saved conversations and the embedded panel keep working.
+    // null means "no specialist requested" — the backend routes automatically.
+    function resolveRequestedAgent(params, agents) {
+      const requestedIds = [params.get('agent'), params.get('topic')].filter(Boolean);
+      return agents.find(agent => requestedIds.includes(agent.id)) || null;
+    }
+
+    // The homepage hero hands its question over with ?q= so it reaches the
+    // composer without being retyped.
+    function readInitialQuestion(params) {
+      return (params.get('q') || '').trim();
+    }
+
+    // Conversations saved before automatic mode always name a specialist;
+    // automatic conversations store agent: null and must stay loadable.
+    function isSupportedConversationAgent(agent, agents) {
+      return agent === null || agents.some(item => item.id === agent);
+    }
+
+    function assistantView() {
+      if (!activeAgent) return AUTOMATIC_ASSISTANT;
+      return { ...activeAgent, placeholder: `Message ${activeAgent.name}…` };
+    }
     let conversations = [];
     let loadedConversationScope = null;
     let currentConversationId = null;
     let messages = [];
     let backendLive = false;
     const pendingConversations = new Set();
+    let initialQuestionHandled = false;
 
     function chatStorageKey() {
       const scope = localStorage.getItem(CHAT_USER_SCOPE_KEY);
@@ -35,7 +79,7 @@
         return data.filter(conversation =>
           conversation &&
           typeof conversation.id === 'string' &&
-          AGENTS.some(agent => agent.id === conversation.agent) &&
+          isSupportedConversationAgent(conversation.agent, AGENTS) &&
           Array.isArray(conversation.messages)
         );
       } catch (error) {
@@ -154,13 +198,13 @@
         .sort((a, b) => new Date(b.updatedAt) - new Date(a.updatedAt));
       container.innerHTML = recent.length
         ? recent.map(conversation => {
-          const agent = AGENTS.find(item => item.id === conversation.agent);
+          const agent = AGENTS.find(item => item.id === conversation.agent) || AUTOMATIC_ASSISTANT;
           return `
             <button class="conversation-item ${conversation.id === currentConversationId ? 'active' : ''}"
               type="button" data-conversation-id="${escapeHtml(conversation.id)}"
               aria-current="${conversation.id === currentConversationId ? 'true' : 'false'}">
               <span class="conversation-item-title">${escapeHtml(conversation.title || getConversationTitle(conversation))}</span>
-              <span class="conversation-item-meta"><span class="agent-dot ${agent.id}"></span>${escapeHtml(agent.name)}<span>${escapeHtml(timeAgo(conversation.updatedAt))}</span></span>
+              <span class="conversation-item-meta"><span class="agent-dot ${agent.id || 'automatic'}"></span>${escapeHtml(agent.name)}<span>${escapeHtml(timeAgo(conversation.updatedAt))}</span></span>
             </button>
           `;
         }).join('')
@@ -170,11 +214,17 @@
     function openConversation(id) {
       const conversation = conversations.find(item => item.id === id);
       if (!conversation) return;
-      activeAgent = AGENTS.find(agent => agent.id === conversation.agent);
+      activeAgent = AGENTS.find(agent => agent.id === conversation.agent) || null;
       currentConversationId = conversation.id;
       messages = conversation.messages;
       const url = new URL(location.href);
-      url.searchParams.set('agent', activeAgent.id);
+      if (activeAgent) {
+        url.searchParams.set('agent', activeAgent.id);
+        url.searchParams.delete('topic');
+      } else {
+        url.searchParams.delete('agent');
+        url.searchParams.delete('topic');
+      }
       history.replaceState({}, '', url);
       renderChatPage();
     }
@@ -198,10 +248,10 @@
 
     function renderMessage(message) {
       const isUser = message.role === 'user';
-      const agent = AGENTS.find(item => item.id === message.agent) || activeAgent;
+      const agent = AGENTS.find(item => item.id === message.agent) || assistantView();
       return `
         <article class="chat-message ${isUser ? 'user-message' : 'assistant-message'}">
-          <div class="message-avatar ${isUser ? 'user-avatar' : `agent-avatar ${agent.id}`}" aria-hidden="true">${isUser ? 'U' : agent.initial}</div>
+          <div class="message-avatar ${isUser ? 'user-avatar' : `agent-avatar ${agent.id || 'automatic'}`}" aria-hidden="true">${isUser ? 'U' : agent.initial}</div>
           <div class="message-column">
             <div class="message-meta">
               <span class="message-author">${isUser ? 'You' : escapeHtml(agent.name)}</span>
@@ -211,26 +261,182 @@
             </div>
             <div class="message-content">${markdownToHtml(message.content)}</div>
             ${message.sources?.length ? renderSources(message.sources) : ''}
+            ${message.noEvidence ? renderSupportActions() : ''}
+            ${!isUser ? renderFeedbackControls(message) : ''}
           </div>
         </article>
       `;
     }
 
+    // ---- Answer feedback (Phase 4) ------------------------------------------
+    const FEEDBACK_REASONS = [
+      ['incorrect_answer', 'Incorrect answer'],
+      ['missing_information', 'Missing information'],
+      ['irrelevant_sources', 'Irrelevant sources'],
+      ['outdated_document', 'Outdated document'],
+      ['other', 'Other'],
+    ];
+
+    // Stable per-answer identifier, derived locally so old saved conversations
+    // keep the same key across reloads. It carries no conversation content.
+    function answerKeyFor(message) {
+      const basis = `${message.time || ''}|${message.agent || 'auto'}|${message.content || ''}`;
+      let first = 2166136261;
+      let second = 0x811c9dc5;
+      for (let index = 0; index < basis.length; index++) {
+        const code = basis.charCodeAt(index);
+        first = Math.imul(first ^ code, 16777619);
+        second = Math.imul(second + code + index, 2654435761);
+      }
+      return `answer-${(first >>> 0).toString(36)}${(second >>> 0).toString(36)}`;
+    }
+
+    function messageForAnswerKey(answerKey) {
+      return messages.find(message =>
+        message.role === 'agent' && answerKeyFor(message) === answerKey
+      ) || null;
+    }
+
+    function questionForMessage(message) {
+      if (message.question) return String(message.question);
+      const index = messages.findIndex(item => item === message);
+      for (let position = index - 1; position >= 0; position--) {
+        if (messages[position].role === 'user') return String(messages[position].content || '');
+      }
+      return '';
+    }
+
+    function sourceStatusFor(message) {
+      if (message.noEvidence) return 'no_sources';
+      if (message.errorCode === 'retrieval_error') return 'retrieval_error';
+      if (message.isError) return 'error';
+      return message.sources?.length ? 'sources' : 'no_sources';
+    }
+
+    function reasonLabel(reason) {
+      const match = FEEDBACK_REASONS.find(([value]) => value === reason);
+      return match ? match[1] : '';
+    }
+
+    function renderReasonChips(message) {
+      const selected = message.feedback?.reason || '';
+      return `
+        <div class="feedback-reasons" role="group" aria-label="Reason for the negative feedback">
+          ${FEEDBACK_REASONS.map(([value, label]) => `
+            <button type="button" class="feedback-reason ${selected === value ? 'selected' : ''}" data-reason="${value}" aria-pressed="${selected === value}">${label}</button>
+          `).join('')}
+        </div>
+      `;
+    }
+
+    function renderFeedbackControls(message) {
+      const answerKey = answerKeyFor(message);
+      const feedback = message.feedback || null;
+      const pending = Boolean(message.feedbackPending);
+      const error = message.feedbackError || '';
+      const stateLabel = feedback
+        ? `${feedback.rating === 'positive' ? 'Marked helpful' : 'Feedback recorded'}${feedback.reason ? ` · ${escapeHtml(reasonLabel(feedback.reason))}` : ''}`
+        : '';
+      return `
+        <div class="message-feedback${pending ? ' is-pending' : ''}" data-answer-key="${escapeHtml(answerKey)}">
+          <span class="feedback-label">Was this helpful?</span>
+          <button type="button" class="feedback-button${feedback?.rating === 'positive' ? ' selected' : ''}" data-feedback="positive" aria-pressed="${feedback?.rating === 'positive'}" aria-label="This answer was helpful" title="Helpful" ${pending ? 'disabled' : ''}>
+            <svg viewBox="0 0 20 20" fill="none" aria-hidden="true"><path d="M6 9.5v7H3.5v-7H6Zm2.2 7h5.1c.9 0 1.7-.6 1.9-1.5l.9-3.6c.2-1-.5-1.9-1.5-1.9h-3l.5-2.4c.2-.9-.4-1.8-1.3-2l-1.2-.3c-.4-.1-.8.1-1 .4L6 8.2V16c0 .8.7 1.5 1.5 1.5H8.2Z" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/></svg>
+          </button>
+          <button type="button" class="feedback-button${feedback?.rating === 'negative' ? ' selected' : ''}" data-feedback="negative" aria-pressed="${feedback?.rating === 'negative'}" aria-label="This answer was not helpful" title="Not helpful" ${pending ? 'disabled' : ''}>
+            <svg viewBox="0 0 20 20" fill="none" aria-hidden="true"><path d="M6 10.5v-7H3.5v7H6Zm2.2-7h5.1c.9 0 1.7.6 1.9 1.5l.9 3.6c.2 1-.5 1.9-1.5 1.9h-3l.5 2.4c.2.9-.4 1.8-1.3 2l-1.2.3c-.4.1-.8-.1-1-.4L6 11.8V4c0-.8.7-1.5 1.5-1.5h.7Z" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/></svg>
+          </button>
+          ${stateLabel ? `<span class="feedback-state" role="status">${stateLabel}</span>` : ''}
+          ${pending ? '<span class="feedback-state" role="status">Saving…</span>' : ''}
+          ${error ? `<span class="feedback-error" role="alert">${escapeHtml(error)}</span>` : ''}
+          ${feedback?.rating === 'negative' ? renderReasonChips(message) : ''}
+        </div>
+      `;
+    }
+
+    function renderFeedbackInto(container, message) {
+      if (!container) return;
+      const wrapper = document.createElement('div');
+      wrapper.innerHTML = renderFeedbackControls(message);
+      container.replaceWith(wrapper.firstElementChild);
+    }
+
+    async function submitFeedback(container, rating, reason) {
+      const answerKey = container?.dataset?.answerKey;
+      const message = answerKey ? messageForAnswerKey(answerKey) : null;
+      if (!message || message.feedbackPending) return;
+
+      const nextReason = rating === 'negative'
+        ? (reason ?? message.feedback?.reason ?? null)
+        : null;
+      message.feedbackPending = true;
+      message.feedbackError = '';
+      renderFeedbackInto(container, message);
+
+      try {
+        const response = await API.submitFeedback({
+          rating,
+          answer_key: answerKey,
+          question: questionForMessage(message).slice(0, 300) || '(no question recorded)',
+          agent: ['hr', 'it', 'policy'].includes(message.agent) ? message.agent : 'auto',
+          reason: nextReason,
+          source_status: sourceStatusFor(message),
+        });
+        message.feedback = { rating: response.rating, reason: response.reason || null };
+      } catch (error) {
+        // Keep the previous rating visible so the user can simply retry.
+        message.feedbackError = error.message
+          || 'Your feedback could not be saved. Please try again.';
+      } finally {
+        message.feedbackPending = false;
+        try {
+          persistConversations();
+        } catch (persistError) {
+          console.error('[EKA] Could not persist feedback:', persistError);
+        }
+        renderFeedbackInto(
+          document.querySelector(`.message-feedback[data-answer-key="${CSS.escape(answerKey)}"]`),
+          message,
+        );
+      }
+    }
+
+    // A source is only citable when it names a real document; "unknown" or
+    // empty identifiers are dropped instead of being shown as citations.
+    function sourceLabel(source) {
+      if (!source || typeof source !== 'object') return '';
+      const name = [source.document, source.name, source.source]
+        .map(value => (value === null || value === undefined ? '' : String(value).trim()))
+        .find(value => value);
+      if (!name || name.toLowerCase() === 'unknown') return '';
+      const location = [];
+      if (source.page !== null && source.page !== undefined && String(source.page).trim() !== '') {
+        location.push(`p. ${source.page}`);
+      }
+      if (source.section) location.push(`§ ${source.section}`);
+      return location.length ? `${name} · ${location.join(' · ')}` : name;
+    }
+
+    function validSourceLabels(sources) {
+      const labels = [];
+      for (const source of Array.isArray(sources) ? sources : []) {
+        const label = sourceLabel(source);
+        if (label && !labels.includes(label)) labels.push(label);
+      }
+      return labels;
+    }
+
     function renderSources(sources) {
-      const visibleSources = (Array.isArray(sources) ? sources : []).filter(source =>
-        source && typeof source === 'object' &&
-        [source.document, source.name, source.source, source.snippet, source.page, source.section]
-          .some(value => value !== null && value !== undefined && String(value).trim() !== '')
-      );
-      if (!visibleSources.length) return '';
+      const labels = validSourceLabels(sources);
+      if (!labels.length) return '';
       return `
         <details class="source-details">
-          <summary>${visibleSources.length} ${visibleSources.length === 1 ? 'source' : 'sources'}</summary>
+          <summary>${labels.length} ${labels.length === 1 ? 'source' : 'sources'}</summary>
           <ul class="source-list">
-            ${visibleSources.map(source => `
+            ${labels.map(label => `
               <li class="source-item">
                 <svg viewBox="0 0 20 20" fill="none" aria-hidden="true"><path d="M5.5 2.75h6l4 4v10.5H5.5a1.75 1.75 0 0 1-1.75-1.75V4.5A1.75 1.75 0 0 1 5.5 2.75Z" stroke="currentColor" stroke-width="1.4"/><path d="M11.5 2.75v4h4M7 11h7M7 14h5" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>
-                <span>${escapeHtml(source.document || source.name || source.source || 'Document')}${source.page ? ` · p. ${escapeHtml(source.page)}` : ''}${source.section ? ` · § ${escapeHtml(source.section)}` : ''}</span>
+                <span>${escapeHtml(label)}</span>
               </li>
             `).join('')}
           </ul>
@@ -238,33 +444,91 @@
       `;
     }
 
+    // Shown only when retrieval found no supporting evidence. The document
+    // link is role-aware because the Documents page stays admin-only.
+    function renderSupportActions() {
+      const canOpenDocuments = appUser?.role === 'admin' && !isDemoAdminUser(appUser);
+      return `
+        <div class="message-support" role="note">
+          <a class="message-support-documents" href="${canOpenDocuments ? 'documents.html' : 'portal.html#resources'}">${canOpenDocuments ? 'Open the Documents library' : 'Browse company resources'}</a>
+          <button type="button" class="message-support-ticket" data-raise-ticket>Still need help? Raise an IT/HR ticket</button>
+        </div>
+      `;
+    }
+
+    // Recent questions reuse the existing per-user conversation storage — no
+    // second history system. Entries are scoped to the signed-in user only.
+    function recentQuestions(limit = 5) {
+      const entries = [];
+      const ordered = [...conversations].sort(
+        (left, right) => new Date(right.updatedAt || 0) - new Date(left.updatedAt || 0),
+      );
+      for (const conversation of ordered) {
+        const question = (conversation.messages || []).find(message => message.role === 'user');
+        if (!question?.content) continue;
+        entries.push({
+          id: conversation.id,
+          question: String(question.content),
+          agent: conversation.agent,
+          time: timeAgo(conversation.updatedAt),
+        });
+        if (entries.length >= limit) break;
+      }
+      return entries;
+    }
+
+    function recentQuestionAgentLabel(agentId) {
+      const agent = AGENTS.find(item => item.id === agentId);
+      return agent ? agent.name : 'Ask Cathy';
+    }
+
     function renderEmptyState() {
+      const view = assistantView();
+      const recent = recentQuestions();
       return `
         <div class="chat-welcome">
-          <div class="welcome-mark ${activeAgent.id}" aria-hidden="true">
+          <div class="welcome-mark ${view.id || 'automatic'}" aria-hidden="true">
             <svg viewBox="0 0 24 24" fill="none"><path d="M12 3.5 14.1 9.9 20.5 12l-6.4 2.1L12 20.5l-2.1-6.4L3.5 12l6.4-2.1L12 3.5Z" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/><path d="m19 3 .6 1.8L21.5 5.5l-1.9.7L19 8l-.6-1.8-1.9-.7 1.9-.7L19 3Z" fill="currentColor"/></svg>
           </div>
           <p class="eyebrow">YOUR COMPANY KNOWLEDGE, CONNECTED</p>
-          <h1>How can we help you today?</h1>
-          <p class="welcome-copy">Choose a specialist, then ask a question. Answers are grounded in your company documents and include sources when available.</p>
+          <h2 class="welcome-title">${escapeHTML(personalizedGreeting(appUser))}</h2>
+          <p class="welcome-copy">Ask Cathy anything about HR, IT or company policies — each question is routed to the right specialist. Answers are grounded in your company documents and include sources when available.</p>
           <div class="welcome-agent-grid" role="group" aria-label="Choose an assistant">
             ${AGENTS.map(agent => `
-              <button class="welcome-agent ${agent.id} ${agent.id === activeAgent.id ? 'selected' : ''}" type="button" data-agent-choice="${agent.id}" aria-pressed="${agent.id === activeAgent.id}">
+              <button class="welcome-agent ${agent.id} ${activeAgent && agent.id === activeAgent.id ? 'selected' : ''}" type="button" data-agent-choice="${agent.id}" aria-pressed="${Boolean(activeAgent && agent.id === activeAgent.id)}">
                 <span class="welcome-agent-icon" aria-hidden="true">${escapeHtml(agent.initial)}</span>
                 <span class="welcome-agent-copy"><strong>${escapeHtml(agent.name)}</strong><span>${escapeHtml(agent.desc.split(',').slice(0, 2).join(' · '))}</span></span>
                 <svg class="welcome-agent-check" viewBox="0 0 20 20" fill="none" aria-hidden="true"><path d="m5 10 3.2 3.2L15 6.5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
               </button>
             `).join('')}
           </div>
-          <div class="prompt-heading"><span>TRY ASKING</span><span>Suggested for ${escapeHtml(activeAgent.name)}</span></div>
+          <div class="prompt-heading"><span>TRY ASKING</span><span>Suggested for ${escapeHtml(view.name)}</span></div>
           <div class="prompt-grid">
-            ${activeAgent.suggested.slice(0, 4).map(prompt => `
+            ${view.suggested.slice(0, 4).map(prompt => `
               <button class="prompt-card" type="button" data-prompt="${escapeHtml(prompt.sub)}">
                 <span>${escapeHtml(prompt.title)}</span>
                 <svg viewBox="0 0 20 20" fill="none" aria-hidden="true"><path d="M4 10h12m-5-5 5 5-5 5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
               </button>
             `).join('')}
           </div>
+          <section class="recent-questions" aria-labelledby="recentQuestionsHeading">
+            <div class="recent-questions-header">
+              <h3 id="recentQuestionsHeading">Recent questions</h3>
+              <button type="button" class="recent-questions-new" data-start-new>New conversation</button>
+            </div>
+            ${recent.length ? `
+              <ul class="recent-questions-list">
+                ${recent.map(item => `
+                  <li>
+                    <button type="button" class="recent-question" data-recent-conversation="${escapeHtml(item.id)}">
+                      <span class="recent-question-text">${escapeHtml(item.question)}</span>
+                      <span class="recent-question-meta">${escapeHtml(recentQuestionAgentLabel(item.agent))} · ${escapeHtml(item.time)}</span>
+                    </button>
+                  </li>
+                `).join('')}
+              </ul>
+            ` : `<p class="recent-questions-empty">No recent questions yet — ask Cathy anything and it will appear here.</p>`}
+          </section>
         </div>
       `;
     }
@@ -276,12 +540,13 @@
       if (loadedConversationScope !== conversationScope) {
         loadedConversationScope = conversationScope;
         conversations = loadConversations();
-        const latest = latestConversationForAgent(activeAgent.id);
+        const latest = latestConversationForAgent(activeAgent ? activeAgent.id : null);
         if (latest) {
           currentConversationId = latest.id;
           messages = latest.messages;
         }
       }
+      const view = assistantView();
       const mainContent = `
         <div class="chat-workspace">
           <aside class="conversation-rail" aria-label="Conversation history">
@@ -296,16 +561,17 @@
             <div class="conversation-list" id="conversationList"></div>
             <div class="rail-footnote">History is saved in this browser.</div>
           </aside>
-          <section class="chat-main" aria-label="Chat with ${escapeHtml(activeAgent.name)}">
+          <section class="chat-main" aria-label="Chat with ${escapeHtml(view.name)}">
             <header class="chat-topbar">
               <div class="active-agent">
-                <span class="agent-mark ${activeAgent.id}">${escapeHtml(activeAgent.initial)}</span>
-                <div><h1>${escapeHtml(activeAgent.name)}</h1><p>${escapeHtml(activeAgent.desc)}</p></div>
+                <span class="agent-mark ${view.id || 'automatic'}" aria-hidden="true">${escapeHtml(view.initial)}</span>
+                <div><h1>${escapeHtml(view.name)}</h1><p>${escapeHtml(view.desc)}</p></div>
               </div>
               <div class="chat-topbar-tools">
                 ${embeddedMode ? `<label class="sr-only" for="embeddedAgentSelect">Choose an assistant</label>
                   <select id="embeddedAgentSelect" class="embedded-agent-select" aria-label="Choose an assistant">
-                    ${AGENTS.map(agent => `<option value="${agent.id}" ${agent.id === activeAgent.id ? 'selected' : ''}>${escapeHtml(agent.name)}</option>`).join('')}
+                    <option value="" ${activeAgent ? '' : 'selected'}>Ask Cathy</option>
+                    ${AGENTS.map(agent => `<option value="${agent.id}" ${activeAgent && agent.id === activeAgent.id ? 'selected' : ''}>${escapeHtml(agent.name)}</option>`).join('')}
                   </select>` : ''}
                 <div class="connection-state connecting" id="connectionState" role="status" aria-live="polite">
                   <span class="connection-dot"></span>Connecting
@@ -317,8 +583,8 @@
             </div>
             <div class="composer-area">
               <form class="composer" id="chatForm">
-                <label class="sr-only" for="composerInput">Message ${escapeHtml(activeAgent.name)}</label>
-                <textarea id="composerInput" rows="1" maxlength="2000" placeholder="Message ${escapeHtml(activeAgent.name)}…" oninput="updateComposer(this)" onkeydown="handleComposerKey(event)"></textarea>
+                <label class="sr-only" for="composerInput">Message ${escapeHtml(view.name)}</label>
+                <textarea id="composerInput" rows="1" maxlength="2000" placeholder="${escapeHtml(view.placeholder)}" oninput="updateComposer(this)" onkeydown="handleComposerKey(event)"></textarea>
                 <div class="composer-controls">
                   <span class="composer-note">Enter to send <span aria-hidden="true">·</span> Shift + Enter for a new line</span>
                   <button class="send-button" id="sendButton" type="submit" disabled aria-label="Send message">
@@ -330,6 +596,29 @@
             </div>
           </section>
         </div>
+        <dialog class="ticket-draft" id="ticketDraft" aria-labelledby="ticketDraftTitle">
+          <div class="ticket-draft-form">
+            <header class="ticket-draft-header">
+              <h2 id="ticketDraftTitle">Ticket draft</h2>
+              <button type="button" class="ticket-draft-dismiss" id="ticketDraftDismiss" aria-label="Close ticket draft">×</button>
+            </header>
+            <p class="ticket-draft-notice" role="note">Draft only — no ticket system is connected yet, so <strong>nothing has been submitted</strong>. Review the text below and copy it into your HR or IT support channel to raise the ticket.</p>
+            <label class="ticket-draft-label" for="ticketDepartment">Department</label>
+            <select id="ticketDepartment" class="ticket-draft-department">
+              <option value="HR">HR</option>
+              <option value="IT">IT</option>
+            </select>
+            <label class="ticket-draft-label" for="ticketSubject">Subject</label>
+            <input id="ticketSubject" class="ticket-draft-subject" type="text" maxlength="120" />
+            <label class="ticket-draft-label" for="ticketBody">Message</label>
+            <textarea id="ticketBody" class="ticket-draft-body" rows="8" maxlength="4000"></textarea>
+            <p class="ticket-draft-feedback" id="ticketDraftFeedback" role="status" aria-live="polite"></p>
+            <div class="ticket-draft-actions">
+              <button type="button" class="ticket-draft-copy" id="ticketDraftCopy">Copy draft</button>
+              <button type="button" class="ticket-draft-close" id="ticketDraftClose">Close</button>
+            </div>
+          </div>
+        </dialog>
       `;
       if (embeddedMode) {
         document.body.classList.add('embedded-chat');
@@ -353,9 +642,46 @@
         submitQuestion(document.getElementById('composerInput').value);
       });
       document.getElementById('embeddedAgentSelect')?.addEventListener('change', event => {
-        switchAgent(event.target.value);
+        if (event.target.value) switchAgent(event.target.value);
+        else switchToAutomatic();
       });
+      document.getElementById('chatTranscript')?.addEventListener('click', event => {
+        const recentButton = event.target.closest('[data-recent-conversation]');
+        if (recentButton) {
+          openConversation(recentButton.dataset.recentConversation);
+          return;
+        }
+        if (event.target.closest('[data-start-new]')) {
+          startNewConversation();
+          return;
+        }
+        if (event.target.closest('[data-raise-ticket]')) {
+          openTicketDraft();
+          return;
+        }
+        const feedbackButton = event.target.closest('[data-feedback]');
+        if (feedbackButton) {
+          submitFeedback(
+            feedbackButton.closest('.message-feedback'),
+            feedbackButton.dataset.feedback,
+          );
+          return;
+        }
+        const reasonButton = event.target.closest('[data-reason]');
+        if (reasonButton) {
+          submitFeedback(
+            reasonButton.closest('.message-feedback'),
+            'negative',
+            reasonButton.dataset.reason,
+          );
+        }
+      });
+      document.getElementById('ticketDepartment')?.addEventListener('change', renderTicketDraft);
+      document.getElementById('ticketDraftCopy')?.addEventListener('click', copyTicketDraft);
+      document.getElementById('ticketDraftClose')?.addEventListener('click', closeTicketDraft);
+      document.getElementById('ticketDraftDismiss')?.addEventListener('click', closeTicketDraft);
       scrollTranscriptToBottom();
+      consumeInitialQuestion();
       API.isLive().then(isLive => {
         backendLive = isLive;
         const state = document.getElementById('connectionState');
@@ -383,13 +709,14 @@
 
     function switchAgent(agentId) {
       const nextAgent = AGENTS.find(agent => agent.id === agentId);
-      if (!nextAgent || nextAgent.id === activeAgent.id) return;
+      if (!nextAgent || (activeAgent && nextAgent.id === activeAgent.id)) return;
       activeAgent = nextAgent;
       const previousConversation = latestConversationForAgent(activeAgent.id);
       currentConversationId = previousConversation?.id || null;
       messages = previousConversation?.messages || [];
       const url = new URL(location.href);
       url.searchParams.set('agent', activeAgent.id);
+      url.searchParams.delete('topic');
       history.replaceState({}, '', url);
       renderChatPage();
     }
@@ -409,6 +736,104 @@
       currentConversationId = null;
       messages = [];
       renderChatPage();
+    }
+
+    function switchToAutomatic() {
+      activeAgent = null;
+      const previousConversation = latestConversationForAgent(null);
+      currentConversationId = previousConversation?.id || null;
+      messages = previousConversation?.messages || [];
+      const url = new URL(location.href);
+      url.searchParams.delete('agent');
+      url.searchParams.delete('topic');
+      history.replaceState({}, '', url);
+      renderChatPage();
+    }
+
+    // One-shot hand-off from the homepage hero: send the question, then strip
+    // ?q= from the URL so a refresh or back-navigation cannot resend it.
+    function consumeInitialQuestion() {
+      if (initialQuestionHandled) return;
+      initialQuestionHandled = true;
+      const question = readInitialQuestion(chatParams);
+      const url = new URL(location.href);
+      url.searchParams.delete('q');
+      chatParams.delete('q');
+      history.replaceState({}, '', url);
+      if (question) submitQuestion(question);
+    }
+
+    // ---- Escalation draft -------------------------------------------------
+    // The product has no ticket backend, so escalation prepares a reviewable
+    // draft from the conversation already scoped to this signed-in user. It is
+    // never transmitted here; the employee sends it through their own channel.
+    function buildTicketDraft(turns, department) {
+      const history = (Array.isArray(turns) ? turns : []).filter(turn => turn && turn.content);
+      const lastUser = [...history].reverse().find(turn => turn.role === 'user');
+      const lastAssistant = [...history].reverse().find(turn => turn.role === 'agent');
+      const summary = (lastUser?.content || 'Assistance needed').replace(/\s+/g, ' ').trim();
+      const subject = `${department} support request: ${summary.slice(0, 80)}`;
+      const lines = [`Department: ${department}`, ''];
+      if (lastUser) lines.push('Employee question:', lastUser.content, '');
+      if (lastAssistant) {
+        const excerpt = lastAssistant.content.length > 600
+          ? `${lastAssistant.content.slice(0, 600)}…`
+          : lastAssistant.content;
+        lines.push('Latest assistant reply:', excerpt, '');
+      }
+      lines.push('Prepared by Ask Cathy. This draft has not been submitted to any ticket system.');
+      return { subject, body: lines.join('\n') };
+    }
+
+    function ticketDepartmentForCurrentView() {
+      return activeAgent && activeAgent.id === 'it' ? 'IT' : 'HR';
+    }
+
+    function renderTicketDraft() {
+      const department = document.getElementById('ticketDepartment')?.value === 'IT' ? 'IT' : 'HR';
+      const draft = buildTicketDraft(messages, department);
+      const subject = document.getElementById('ticketSubject');
+      const body = document.getElementById('ticketBody');
+      if (subject) subject.value = draft.subject;
+      if (body) body.value = draft.body;
+      const feedback = document.getElementById('ticketDraftFeedback');
+      if (feedback) feedback.textContent = '';
+      return draft;
+    }
+
+    function openTicketDraft() {
+      const dialog = document.getElementById('ticketDraft');
+      if (!dialog) return;
+      const departmentSelect = document.getElementById('ticketDepartment');
+      if (departmentSelect) departmentSelect.value = ticketDepartmentForCurrentView();
+      renderTicketDraft();
+      if (typeof dialog.showModal === 'function') dialog.showModal();
+      else dialog.setAttribute('open', '');
+      document.getElementById('ticketSubject')?.focus();
+    }
+
+    function closeTicketDraft() {
+      const dialog = document.getElementById('ticketDraft');
+      if (!dialog) return;
+      if (typeof dialog.close === 'function' && dialog.open) dialog.close();
+      else dialog.removeAttribute('open');
+      const feedback = document.getElementById('ticketDraftFeedback');
+      if (feedback) feedback.textContent = '';
+    }
+
+    async function copyTicketDraft() {
+      const subject = document.getElementById('ticketSubject');
+      const body = document.getElementById('ticketBody');
+      const feedback = document.getElementById('ticketDraftFeedback');
+      const text = `Subject: ${subject ? subject.value : ''}\n\n${body ? body.value : ''}`;
+      try {
+        await navigator.clipboard.writeText(text);
+        if (feedback) feedback.textContent = 'Draft copied. Nothing has been sent — paste it into your HR or IT support channel to raise the ticket.';
+      } catch (_) {
+        body?.focus();
+        body?.select();
+        if (feedback) feedback.textContent = 'Copy the selected draft (Ctrl/Cmd + C) and paste it into your HR or IT support channel. Nothing has been sent.';
+      }
     }
 
     function updateComposer(input) {
@@ -434,7 +859,7 @@
       if (!question || pendingConversations.has(currentConversationId)) return;
 
       if (!currentConversationId) {
-        const conversation = createConversation(activeAgent.id);
+        const conversation = createConversation(activeAgent ? activeAgent.id : null);
         conversations.unshift(conversation);
         currentConversationId = conversation.id;
         messages = conversation.messages;
@@ -442,7 +867,7 @@
       const conversation = getCurrentConversation();
       if (!conversation) return;
 
-      const requestAgent = AGENTS.find(agent => agent.id === conversation.agent);
+      const requestAgent = AGENTS.find(agent => agent.id === conversation.agent) || assistantView();
       const now = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
       conversation.messages.push({ role: 'user', content: question, agent: conversation.agent, time: now });
       messages = conversation.messages;
@@ -458,7 +883,7 @@
       transcript.insertAdjacentHTML('beforeend', renderMessage(conversation.messages.at(-1)));
       transcript.insertAdjacentHTML('beforeend', `
         <div class="chat-message assistant-message typing-message" id="typingMessage">
-          <div class="message-avatar agent-avatar ${requestAgent.id}" aria-hidden="true">${escapeHtml(requestAgent.initial)}</div>
+          <div class="message-avatar agent-avatar ${requestAgent.id || 'automatic'}" aria-hidden="true">${escapeHtml(requestAgent.initial)}</div>
           <div class="message-column"><div class="message-meta"><span class="message-author">${escapeHtml(requestAgent.name)}</span><span class="stream-status">Connecting</span></div><div class="typing-dots" role="status" aria-label="Waiting for response"><span></span><span></span><span></span></div><div class="stream-content message-content" aria-live="polite"></div></div>
         </div>
       `);
@@ -536,6 +961,8 @@
                 ? 'Hugging Face Inference Providers'
               : response.llm_provider === 'unconfigured' ? 'Setup required' : '',
           isError: Boolean(response.error_code),
+          errorCode: response.error_code || null,
+          noEvidence: response.error_code === 'insufficient_evidence',
         };
       } catch (error) {
         reply = {
@@ -545,6 +972,8 @@
           sources: [],
           time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
           isError: true,
+          errorCode: error.code || null,
+          noEvidence: error.code === 'insufficient_evidence',
         };
       }
 

@@ -10,10 +10,13 @@
   <link rel="stylesheet" href="css/pages.css" />
 </head>
 <body class="employee-portal-page">
+  <a class="skip-link" href="#top">Skip to content</a>
   <div id="portalApp" class="portal-loading" role="status">Loading your company portal…</div>
   <script src="js/app.js"></script>
   <script>
-    let selectedAssistantAgent = 'hr';
+    let selectedAssistantAgent = null;
+    let heroAskSubmitting = false;
+    let assistantTrigger = null;
 
     function portalMarkup(user) {
       const adminLinks = user.role === 'admin' && !isDemoAdminUser(user)
@@ -32,23 +35,36 @@
             ${adminLinks}
           </nav>
           <div class="portal-account">
+            <button type="button" class="portal-header-assistant" aria-controls="assistantPanel" aria-expanded="false" onclick="openAssistant()">Ask Cathy</button>
             <span class="portal-account-avatar" aria-hidden="true">${escapeHTML(user.username.slice(0, 1).toUpperCase())}</span>
             <span class="portal-account-name">${escapeHTML(user.username)}</span>
             <button type="button" class="portal-signout" onclick="logout()">Sign out</button>
           </div>
         </header>
-        <main id="top" class="portal-main">
-          <div class="portal-demo-notice"><span aria-hidden="true">ⓘ</span> Northstar is a fictional company. Announcements and directory details below are sample demonstration content.</div>
+        <main id="top" class="portal-main" tabindex="-1">
+          <div class="portal-demo-notice"><span aria-hidden="true">ⓘ</span> Northstar is a fictional company, and the announcements below are sample demonstration content.</div>
           ${new URLSearchParams(location.search).get('access') === 'denied'
             ? '<p class="portal-access-notice" role="status">Administrator access is required for that page.</p>' : ''}
           <section class="portal-hero" aria-labelledby="portalHeading">
             <div class="portal-hero-copy">
               <p class="eyebrow">NORTHSTAR WORKSPACE</p>
-              <h1 id="portalHeading">Good to have you here.</h1>
+              <h1 id="portalHeading">${escapeHTML(personalizedGreeting(user))}</h1>
               <p>Your company resources, people updates, and workplace help—together in one place.</p>
-              <button type="button" class="portal-hero-action" onclick="openAssistant('hr')">
-                <span class="portal-sparkle" aria-hidden="true">✦</span> Ask the company assistant
-              </button>
+              <form class="portal-hero-ask" id="heroAskForm" novalidate>
+                <div class="portal-hero-ask-row">
+                  <label class="sr-only" for="heroAskInput">Ask Cathy a question</label>
+                  <input class="portal-hero-ask-input" id="heroAskInput" name="q" type="text" maxlength="2000" autocomplete="off" placeholder="Ask anything about HR, IT or company policies…" />
+                  <button class="portal-hero-ask-submit" id="heroAskSubmit" type="submit">Ask Cathy</button>
+                </div>
+                <p class="portal-hero-ask-error" id="heroAskError" role="alert" aria-live="polite"></p>
+              </form>
+              <div class="portal-hero-examples" role="group" aria-label="Example questions for Ask Cathy">
+                <span class="portal-hero-examples-label" aria-hidden="true">TRY ASKING</span>
+                <button type="button" class="portal-hero-example" data-hero-example="How many leave days do I have?">How many leave days do I have?</button>
+                <button type="button" class="portal-hero-example" data-hero-example="My VPN is not connecting.">My VPN is not connecting.</button>
+                <button type="button" class="portal-hero-example" data-hero-example="What is the work-from-home policy?">What is the work-from-home policy?</button>
+                <button type="button" class="portal-hero-example" data-hero-example="How do I reset my password?">How do I reset my password?</button>
+              </div>
             </div>
             <div class="portal-hero-art" aria-hidden="true">
               <div class="portal-orbit portal-orbit-one"></div><div class="portal-orbit portal-orbit-two"></div>
@@ -56,24 +72,24 @@
             </div>
           </section>
 
-          <section id="announcements" class="portal-section">
-            <div class="portal-section-heading"><div><p class="eyebrow">FROM AROUND NORTHSTAR</p><h2>Company announcements</h2></div><span class="portal-sample-label">SAMPLE CONTENT</span></div>
+          <section id="announcements" class="portal-section" aria-labelledby="announcementsHeading">
+            <div class="portal-section-heading"><div><p class="eyebrow">FROM AROUND NORTHSTAR</p><h2 id="announcementsHeading">Company announcements</h2></div><button type="button" class="whats-new-button" data-whats-new>What's new since your last visit?</button></div>
             <div class="portal-announcement-grid">
               <article class="portal-announcement-card featured-announcement">
                 <span class="portal-card-icon announcement-icon-indigo" aria-hidden="true">✦</span>
-                <p class="portal-card-kicker">PEOPLE & CULTURE · SAMPLE</p>
+                <p class="portal-card-kicker">PEOPLE & CULTURE</p>
                 <h3>Welcome to the refreshed employee hub</h3>
                 <p>This fictional update shows where Northstar teams would share company news and important resources.</p>
               </article>
               <article class="portal-announcement-card">
                 <span class="portal-card-icon announcement-icon-teal" aria-hidden="true">↗</span>
-                <p class="portal-card-kicker">WORKPLACE · SAMPLE</p>
+                <p class="portal-card-kicker">WORKPLACE</p>
                 <h3>Explore the team resource library</h3>
                 <p>Find quick links to common workplace topics and ask the assistant where to look next.</p>
               </article>
               <article class="portal-announcement-card">
                 <span class="portal-card-icon announcement-icon-coral" aria-hidden="true">♡</span>
-                <p class="portal-card-kicker">WELLBEING · SAMPLE</p>
+                <p class="portal-card-kicker">WELLBEING</p>
                 <h3>Make space for a thoughtful check-in</h3>
                 <p>A sample reminder to share supportive, employee-first updates in a real company portal.</p>
               </article>
@@ -82,44 +98,168 @@
           <section id="resources" class="portal-section portal-resources-section">
             <div class="portal-section-heading"><div><p class="eyebrow">A GOOD PLACE TO START</p><h2>Quick links</h2></div></div>
             <div class="portal-resource-grid">
-              <button class="portal-resource-card" type="button" onclick="openAssistant('hr')">
-                <span class="portal-resource-icon resource-hr" aria-hidden="true">HR</span><span><strong>People & HR</strong><small>Ask about leave, benefits, and onboarding</small></span><span class="portal-resource-arrow" aria-hidden="true">↗</span>
-              </button>
-              <button class="portal-resource-card" type="button" onclick="openAssistant('it')">
-                <span class="portal-resource-icon resource-it" aria-hidden="true">IT</span><span><strong>IT help desk</strong><small>Get guidance on access, VPN, and devices</small></span><span class="portal-resource-arrow" aria-hidden="true">↗</span>
-              </button>
-              <button class="portal-resource-card" type="button" onclick="openAssistant('policy')">
-                <span class="portal-resource-icon resource-policy" aria-hidden="true">PL</span><span><strong>Policies & compliance</strong><small>Find information in company policy documents</small></span><span class="portal-resource-arrow" aria-hidden="true">↗</span>
-              </button>
-              <a class="portal-resource-card" href="#support">
-                <span class="portal-resource-icon resource-support" aria-hidden="true">?</span><span><strong>Get workplace support</strong><small>Choose a specialist assistant for help</small></span><span class="portal-resource-arrow" aria-hidden="true">↗</span>
+              <a class="portal-resource-card" href="chat.html?topic=hr">
+                <span class="portal-resource-icon resource-hr" aria-hidden="true">HR</span><span><strong>People & HR</strong><small>Ask about leave, benefits, and onboarding</small></span><span class="portal-resource-arrow" aria-hidden="true">→</span>
+              </a>
+              <a class="portal-resource-card" href="chat.html?topic=it">
+                <span class="portal-resource-icon resource-it" aria-hidden="true">IT</span><span><strong>IT help desk</strong><small>Get guidance on access, VPN, and devices</small></span><span class="portal-resource-arrow" aria-hidden="true">→</span>
+              </a>
+              <a class="portal-resource-card" href="chat.html?topic=policy">
+                <span class="portal-resource-icon resource-policy" aria-hidden="true">PL</span><span><strong>Policies & compliance</strong><small>Find information in company policy documents</small></span><span class="portal-resource-arrow" aria-hidden="true">→</span>
+              </a>
+              <a class="portal-resource-card" href="chat.html">
+                <span class="portal-resource-icon resource-support" aria-hidden="true">?</span><span><strong>Ask Cathy</strong><small>Ask anything about HR, IT or company policies</small></span><span class="portal-resource-arrow" aria-hidden="true">→</span>
               </a>
             </div>
           </section>
 
           <section id="support" class="portal-support-strip">
             <div><p class="eyebrow">HERE WHEN YOU NEED IT</p><h2>Not sure where to start?</h2><p>Ask a question in plain language. The assistant searches company documents and cites sources when available.</p></div>
-            <button type="button" class="portal-support-button" onclick="openAssistant('hr')">Open AI help <span aria-hidden="true">↗</span></button>
+            <button type="button" class="portal-support-button" onclick="openAssistant()">Ask Cathy <span aria-hidden="true">→</span></button>
           </section>
           <footer class="portal-footer"><span>Northstar · Fictional demonstration company</span><span>For official guidance, refer to approved company documents.</span></footer>
         </main>
-        <button type="button" class="assistant-fab" id="assistantFab" aria-label="Open AI help assistant" aria-controls="assistantPanel" aria-expanded="false" onclick="openAssistant()">
+        <button type="button" class="assistant-fab" id="assistantFab" aria-label="Ask Cathy, the workplace assistant" aria-controls="assistantPanel" aria-expanded="false" onclick="openAssistant()">
           <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M12 3.5 14.1 9.9 20.5 12l-6.4 2.1L12 20.5l-2.1-6.4L3.5 12l6.4-2.1L12 3.5Z" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/><path d="m19 3 .6 1.8 1.9.7-1.9.7L19 8l-.6-1.8-1.9-.7 1.9-.7L19 3Z" fill="currentColor"/></svg>
           <span>Ask Cathy</span>
         </button>
-        <section class="assistant-panel" id="assistantPanel" aria-label="Cathy workplace assistant" hidden>
+        <section class="assistant-panel" id="assistantPanel" aria-label="Ask Cathy workplace assistant" hidden>
           <header class="assistant-panel-header">
-            <div class="assistant-panel-brand"><span class="portal-brand-mark">C</span><span><strong>Cathy</strong><small>WORKPLACE ASSISTANT · HR · IT · POLICY</small></span></div>
+            <div class="assistant-panel-brand"><span class="portal-brand-mark" aria-hidden="true">C</span><span><strong>Ask Cathy</strong><small>WORKPLACE ASSISTANT · HR · IT · POLICY</small></span></div>
             <div class="assistant-panel-controls">
               <button type="button" id="assistantMinimize" aria-label="Minimize assistant" title="Minimize" onclick="minimizeAssistant()">−</button>
               <button type="button" aria-label="Close assistant" title="Close" onclick="closeAssistant()">×</button>
             </div>
           </header>
           <div class="assistant-panel-content" id="assistantPanelContent">
-            <iframe id="assistantFrame" title="Cathy, Northstar workplace assistant for HR, IT, and Policy" src="chat.html?embedded=1&amp;agent=hr"></iframe>
+            <iframe id="assistantFrame" title="Ask Cathy, Northstar workplace assistant for HR, IT, and Policy" src="chat.html?embedded=1"></iframe>
           </div>
         </section>
       `;
+    }
+
+    // ---- What's new since your last visit (Phase 5) --------------------
+    // Announcements are read back out of the rendered portal, so the summary
+    // can only ever contain announcements that actually exist for this user.
+    // Visit history is a single timestamp per browser profile — never content.
+    const PORTAL_LAST_VISIT_KEY = 'eka-portal-last-visit-v1';
+    const WHATS_NEW_LIMIT = 3;
+    let lastVisitBeforeThisVisit = null;
+
+    function collectAnnouncements(root) {
+      const scope = root || document;
+      const cards = Array.from(scope.querySelectorAll('.portal-announcement-card'));
+      return cards
+        .map(card => {
+          const time = card.querySelector('time[datetime]');
+          const link = card.querySelector('a[href]');
+          return {
+            title: card.querySelector('h3')?.textContent?.trim() || '',
+            date: time ? time.getAttribute('datetime') : null,
+            href: link ? link.getAttribute('href') : null,
+          };
+        })
+        .filter(item => item.title)
+        .slice(0, WHATS_NEW_LIMIT);
+    }
+
+    function readLastVisit(storage) {
+      try {
+        const raw = (storage || window.localStorage).getItem(PORTAL_LAST_VISIT_KEY);
+        if (!raw) return null;
+        const parsed = new Date(raw);
+        return Number.isNaN(parsed.getTime()) ? null : parsed;
+      } catch (error) {
+        return null; // Storage unavailable → documented fallback path.
+      }
+    }
+
+    function recordVisit(storage, now) {
+      try {
+        (storage || window.localStorage).setItem(
+          PORTAL_LAST_VISIT_KEY,
+          (now instanceof Date ? now : new Date()).toISOString(),
+        );
+      } catch (error) {
+        // Visit history is optional; the what's-new fallback covers this.
+      }
+    }
+
+    function formatVisitDate(date) {
+      try {
+        return date.toLocaleDateString([], { day: 'numeric', month: 'short', year: 'numeric' });
+      } catch (error) {
+        return date.toISOString().slice(0, 10);
+      }
+    }
+
+    function announcementLine(item, position) {
+      const date = item.date ? ` (${item.date})` : '';
+      const href = item.href ? ` — ${item.href}` : '';
+      return `${position}. ${item.title}${date}${href}`;
+    }
+
+    // Pure and bounded: summarises only the announcements it is handed and
+    // never invents dates, links or news that are not there.
+    function buildWhatsNewQuestion(announcements, lastVisitLabel) {
+      const items = (Array.isArray(announcements) ? announcements : [])
+        .filter(item => item && item.title)
+        .slice(0, WHATS_NEW_LIMIT);
+      const lines = items.map((item, index) => announcementLine(item, index + 1));
+      const intro = lastVisitLabel
+        ? `What has changed since my last visit on ${lastVisitLabel}? My portal currently shows these announcements:`
+        : `I don't have a record of my previous visit, so please tell me what is currently new. These are the ${items.length} most recent announcements shown in my portal:`;
+      const closing = items.length
+        ? lines.join(' ')
+        : 'There are currently no announcements in the portal.';
+      return [intro, closing].filter(Boolean).join(' ');
+    }
+
+    // The hero input hands the question to Ask Cathy through a query
+    // parameter, so it survives navigation, refresh and the back button.
+    function assistantQuestionUrl(question) {
+      const trimmed = String(question ?? '').trim();
+      if (!trimmed) return null;
+      return `chat.html?q=${encodeURIComponent(trimmed)}`;
+    }
+
+    function submitHeroQuestion(rawQuestion) {
+      const question = String(rawQuestion ?? '').trim();
+      const error = document.getElementById('heroAskError');
+      const input = document.getElementById('heroAskInput');
+      const submit = document.getElementById('heroAskSubmit');
+      const form = document.getElementById('heroAskForm');
+      if (!question) {
+        if (error) error.textContent = 'Type a question to ask Cathy.';
+        input?.focus();
+        return;
+      }
+      if (heroAskSubmitting) return;
+      heroAskSubmitting = true;
+      if (error) error.textContent = '';
+      if (input) input.value = question;
+      if (submit) {
+        submit.disabled = true;
+        submit.textContent = 'Opening Ask Cathy…';
+      }
+      form?.setAttribute('aria-busy', 'true');
+      window.location.href = assistantQuestionUrl(question);
+    }
+
+    // Reset when the browser restores the page from the back/forward cache.
+    function resetHeroQuestionForm() {
+      const submit = document.getElementById('heroAskSubmit');
+      if (!submit) return;
+      heroAskSubmitting = false;
+      submit.disabled = false;
+      submit.textContent = 'Ask Cathy';
+      document.getElementById('heroAskForm')?.removeAttribute('aria-busy');
+    }
+
+    function setAssistantExpanded(expanded) {
+      document.querySelectorAll('[aria-controls="assistantPanel"]').forEach(control => {
+        control.setAttribute('aria-expanded', String(expanded));
+      });
     }
 
     async function initializePortal() {
@@ -129,12 +269,36 @@
       const frame = document.getElementById('assistantFrame');
       frame?.addEventListener('load', syncAssistantAgent);
       syncAssistantAgent();
+      document.getElementById('heroAskForm')?.addEventListener('submit', event => {
+        event.preventDefault();
+        submitHeroQuestion(document.getElementById('heroAskInput')?.value);
+      });
+      document.querySelectorAll('[data-hero-example]').forEach(button => {
+        button.addEventListener('click', () => {
+          const input = document.getElementById('heroAskInput');
+          if (input) input.value = button.dataset.heroExample || '';
+          submitHeroQuestion(button.dataset.heroExample);
+        });
+      });
+      lastVisitBeforeThisVisit = readLastVisit();
+      recordVisit();
+      document.querySelector('[data-whats-new]')?.addEventListener('click', () => {
+        const label = lastVisitBeforeThisVisit
+          ? formatVisitDate(lastVisitBeforeThisVisit)
+          : null;
+        const question = buildWhatsNewQuestion(collectAnnouncements(document), label);
+        window.location.href = assistantQuestionUrl(question);
+      });
+      window.addEventListener('pageshow', resetHeroQuestionForm);
       document.addEventListener('keydown', event => {
         if (event.key === 'Escape') closeAssistant();
       });
     }
 
     function syncAssistantAgent() {
+      // No specialist requested: Ask Cathy routes each question itself, so the
+      // embedded assistant keeps its automatic mode instead of a forced default.
+      if (!selectedAssistantAgent) return;
       const frame = document.getElementById('assistantFrame');
       if (!frame?.contentWindow) return;
       frame.contentWindow.postMessage(
@@ -150,9 +314,12 @@
         selectedAssistantAgent = agent;
         syncAssistantAgent();
       }
+      assistantTrigger = document.activeElement instanceof HTMLElement
+        ? document.activeElement
+        : null;
       panel.hidden = false;
       panel.classList.remove('minimized');
-      document.getElementById('assistantFab').setAttribute('aria-expanded', 'true');
+      setAssistantExpanded(true);
     }
 
     function minimizeAssistant() {
@@ -164,8 +331,11 @@
       if (!panel) return;
       panel.hidden = true;
       panel.classList.remove('minimized');
-      document.getElementById('assistantFab').setAttribute('aria-expanded', 'false');
-      document.getElementById('assistantFab').focus();
+      setAssistantExpanded(false);
+      const trigger = assistantTrigger;
+      assistantTrigger = null;
+      if (trigger && document.contains(trigger)) trigger.focus();
+      else document.getElementById('assistantFab')?.focus();
     }
 
     initializePortal();
