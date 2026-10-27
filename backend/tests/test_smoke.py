@@ -369,6 +369,7 @@ def test_health_endpoint_responds_during_a_slow_chat_request(
     from fastapi.testclient import TestClient
     from app.api import routes
     from app.main import app
+    from app.config import settings
     from app.rag.pipeline import RagResult
     from app.request_context import current_request_id
     from tests.conftest import authenticate_client
@@ -391,6 +392,7 @@ def test_health_endpoint_responds_during_a_slow_chat_request(
         )
 
     monkeypatch.setattr(routes, "run_rag", slow_rag)
+    monkeypatch.setattr(settings, "gemini_api_key", "test-gemini-key")
 
     with TestClient(app) as client:
         authenticate_client(client, "employee")

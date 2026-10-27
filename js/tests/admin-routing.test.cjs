@@ -5,12 +5,12 @@ const test = require('node:test');
 const vm = require('node:vm');
 
 const appSource = fs.readFileSync(path.resolve(__dirname, '../app.js'), 'utf8');
-const routeHelpers = appSource.match(
-  /function isDemoAdminUser\(user\) \{[\s\S]*?\n\}\n\nfunction homePageForUser\(user\) \{[\s\S]*?\n\}/,
-);
+const demoAdminHelper = appSource.match(/function isDemoAdminUser\(user\) \{[\s\S]*?\n\}/);
+const homePageHelper = appSource.match(/function homePageForUser\(user\) \{[\s\S]*?\n\}/);
 const sidebarRenderer = appSource.match(/function renderSidebar\(activePage\) \{[\s\S]*?\n\}/);
 
-assert.ok(routeHelpers, 'expected the app to define its server-identity routing helpers');
+assert.ok(demoAdminHelper, 'expected the app to define its demo-admin identity helper');
+assert.ok(homePageHelper, 'expected the app to define its home-page routing helper');
 assert.ok(sidebarRenderer, 'expected the app to define its shared workspace navigation');
 
 const routingContext = {
@@ -29,7 +29,7 @@ const routingContext = {
   escapeHTML: (value) => String(value),
 };
 vm.runInNewContext(
-  `${routeHelpers[0]}\n${sidebarRenderer[0]}\nglobalThis.homePageForUser = homePageForUser; globalThis.renderSidebar = renderSidebar;`,
+  `${demoAdminHelper[0]}\n${homePageHelper[0]}\n${sidebarRenderer[0]}\nglobalThis.homePageForUser = homePageForUser; globalThis.renderSidebar = renderSidebar;`,
   routingContext,
 );
 

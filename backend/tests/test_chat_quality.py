@@ -1311,6 +1311,7 @@ def test_generation_failure_logs_stage_provider_model_and_redacts_key(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     monkeypatch.setattr(llm.settings, "gemini_model", "gemini-3.5-flash-lite")
+    monkeypatch.setattr(llm.settings, "gemini_api_key", "test-gemini-key")
     model = mock_generation(
         monkeypatch,
         sample_chunks(),
